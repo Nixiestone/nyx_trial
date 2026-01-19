@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  trading-bot:
+    build: .
+    container_name: nyx-trading-bot
+    restart: unless-stopped
+    environment:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+    env_file:
+      - config/secrets.env
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./models:/app/models
+    networks:
+      - bot-network
+
+networks:
+  bot-network:
+    driver: bridge
