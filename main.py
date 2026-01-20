@@ -1,11 +1,10 @@
 """
-Main Trading Bot - WITH ML SELF-TRAINING
+Main Trading Bot - WITH ML SELF-TRAINING AND DUPLICATE PREVENTION
 Author: BLESSING OMOREGIE (Enhanced by QDev Team)
 GitHub: Nixiestone
 Repository: nyx_trial
-Path: C:\Users\NIXIE\Desktop\projects\trading-bot\nyx_trial\main.py
 
-REPLACE ENTIRE FILE
+REPLACE ENTIRE main.py FILE
 """
 
 import sys
@@ -26,12 +25,13 @@ from src.trading.risk_manager import RiskManager
 from src.notifications.notifier import MultiUserNotifier
 from src.utils.logger import get_logger
 from src.utils.symbol_normalizer import SymbolNormalizer
+from src.utils.signal_tracker import SignalTracker
 from src.models.ml_trainer import TrainingDataCollector, MLModelTrainer
 from src.models.ml_ensemble import MLEnsemble
 
 
 class TradingBot:
-    """Main trading bot orchestrator with ML self-training."""
+    """Main trading bot orchestrator with ML self-training and duplicate prevention."""
     
     def __init__(self):
         """Initialize the trading bot."""
@@ -54,10 +54,14 @@ class TradingBot:
         self.notifier = None
         self.data_collector = None
         self.ml_trainer = None
+        self.signal_tracker = None
         self.running = False
         
         # Signal tracking for ML training
         self.active_signals = {}  # signal_id -> signal_data
+        
+        # Cleanup counter
+        self.cycle_count = 0
     
     def initialize(self) -> bool:
         """Initialize all bot components."""
@@ -69,7 +73,11 @@ class TradingBot:
                 self.logger.error("Configuration validation failed")
                 return False
             
-            # Initialize notifier first
+            # Initialize signal tracker (for duplicate prevention)
+            self.logger.info("Initializing signal deduplication system...")
+            self.signal_tracker = SignalTracker(cooldown_hours=24)
+            
+            # Initialize notifier
             self.logger.info("Initializing multi-user notification system...")
             self.notifier = MultiUserNotifier(settings)
             
@@ -104,7 +112,7 @@ class TradingBot:
             # Initialize ML training system
             self.logger.info("Initializing ML self-training system...")
             self.data_collector = TrainingDataCollector(settings)
-            ml_ensemble = self.signal_generator.ml_ensemble  # Use same ensemble
+            ml_ensemble = self.signal_generator.ml_ensemble
             self.ml_trainer = MLModelTrainer(settings, ml_ensemble, self.data_collector)
             
             # Try to load existing models
@@ -115,6 +123,9 @@ class TradingBot:
                 self.logger.warning("No pre-trained models found - will train from scratch")
             
             self.logger.info("All components initialized successfully")
+            
+            # Get signal tracker stats
+            tracker_stats = self.signal_tracker.get_signal_stats()
             
             # Send startup notification
             account_info = self.connector.get_account_info()
@@ -127,6 +138,9 @@ Balance: {account_info['balance']} {account_info['currency']}
 Auto Trading: {'ENABLED' if settings.AUTO_TRADING_ENABLED else 'DISABLED'}
 Telegram Subscribers: {subscriber_count}
 ML Training: ENABLED (auto-trains every {settings.ML_RETRAIN_INTERVAL_HOURS}h)
+Duplicate Prevention: ENABLED (24h cooldown)
+Unique Signals Tracked: {tracker_stats.get('total_unique_signals', 0)}
+Duplicates Prevented: {tracker_stats.get('duplicates_prevented', 0)}
             """
             self.notifier.send_bot_status("STARTED", startup_details.strip())
             
@@ -145,6 +159,14 @@ ML Training: ENABLED (auto-trains every {settings.ML_RETRAIN_INTERVAL_HOURS}h)
             self.logger.info(f"\n{'='*70}")
             self.logger.info(f"TRADING CYCLE - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             self.logger.info(f"{'='*70}")
+            
+            # Increment cycle count
+            self.cycle_count += 1
+            
+            # Cleanup old signals every 24 cycles (once per day if hourly scans)
+            if self.cycle_count % 24 == 0:
+                self.logger.info("Running signal tracker cleanup...")
+                self.signal_tracker.cleanup_old_signals(days=7)
             
             # Check if ML models need retraining
             if self.ml_trainer.auto_train_if_needed():
@@ -174,12 +196,25 @@ ML Training: ENABLED (auto-trains every {settings.ML_RETRAIN_INTERVAL_HOURS}h)
                 
                 self.logger.info(f"Signal detected for {symbol}")
                 
+                # CHECK FOR DUPLICATES FIRST
+                is_duplicate, dup_reason = self.signal_tracker.is_duplicate(signal)
+                
+                if is_duplicate:
+                    self.logger.warning(f"Duplicate signal blocked: {dup_reason}")
+                    # Record as duplicate but don't send
+                    self.signal_tracker.record_signal(signal, was_sent=False)
+                    continue
+                
                 # Validate trade
                 is_valid, validation_reason = self.risk_manager.validate_trade(signal)
                 
                 if not is_valid:
                     self.logger.warning(f"Trade validation failed: {validation_reason}")
                     continue
+                
+                # NEW SIGNAL - Record and send
+                self.signal_tracker.record_signal(signal, was_sent=True)
+                self.logger.info(f"New unique signal - sending to subscribers")
                 
                 # Send signal notification
                 self.notifier.send_signal_notification(signal)
@@ -370,6 +405,11 @@ ML Training: ENABLED (auto-trains every {settings.ML_RETRAIN_INTERVAL_HOURS}h)
         self.logger.info("\nShutting down bot...")
         
         try:
+            # Get final stats
+            if self.signal_tracker:
+                stats = self.signal_tracker.get_signal_stats()
+                self.logger.info(f"Signal Stats: {stats}")
+            
             if self.notifier:
                 self.notifier.send_bot_status("STOPPED")
             
