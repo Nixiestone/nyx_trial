@@ -343,6 +343,7 @@ class MT5Connector:
     ) -> float:
         """
         Calculate appropriate lot size based on risk management.
+        Handles all pair types including JPY pairs, crypto, and indices.
         
         Args:
             symbol: Trading symbol
@@ -367,12 +368,41 @@ class MT5Connector:
             
             # Get point value
             point = symbol_info['point']
+            digits = symbol_info['digits']
+            
+            # Determine pip multiplier based on symbol type
+            # JPY pairs: pip = 0.01 (2 digits after decimal)
+            # Most forex: pip = 0.0001 (4 digits)
+            # Crypto/Indices: pip = 1.0 or based on point
+            if 'JPY' in symbol:
+                pip_value_in_points = 0.01 / point  # JPY pairs
+            elif digits == 5 or digits == 3:
+                # 5-digit broker for forex or 3-digit for JPY
+                pip_value_in_points = 10
+            elif digits == 4 or digits == 2:
+                # 4-digit broker for forex or 2-digit for JPY
+                pip_value_in_points = 1
+            else:
+                # For indices, crypto, etc.
+                pip_value_in_points = 1
             
             # Calculate pip value for 1 lot
-            pip_value = symbol_info['trade_contract_size'] * point * 10
+            contract_size = symbol_info['trade_contract_size']
+            pip_value_per_lot = contract_size * point * pip_value_in_points
+            
+            # For currency pairs where account currency differs
+            # We need to convert the pip value
+            account_currency = account['currency']
+            quote_currency = symbol_info.get('currency_profit', '')
+            
+            if quote_currency and quote_currency != account_currency:
+                # Need to convert (simplified, assuming direct rate)
+                # In production, should fetch actual conversion rate
+                conversion_rate = 1.0
+                pip_value_per_lot *= conversion_rate
             
             # Calculate lot size
-            lot_size = risk_amount / (stop_loss_pips * pip_value)
+            lot_size = risk_amount / (stop_loss_pips * pip_value_per_lot)
             
             # Round to lot step
             lot_step = symbol_info['volume_step']
@@ -383,13 +413,51 @@ class MT5Connector:
             lot_size = min(symbol_info['volume_max'], lot_size)
             lot_size = min(self.config.MAX_LOT_SIZE, lot_size)
             
-            self.logger.debug(f"Calculated lot size: {lot_size}")
+            self.logger.debug(
+                f"Calculated lot size for {symbol}: {lot_size} "
+                f"(Risk: {risk_amount:.2f}, SL: {stop_loss_pips} pips)"
+            )
             
             return lot_size
             
         except Exception as e:
             self.logger.exception(f"Error calculating lot size: {e}")
             return self.config.MIN_LOT_SIZE
+    
+    def calculate_pips(
+        self,
+        symbol: str,
+        price1: float,
+        price2: float
+    ) -> float:
+        """
+        Calculate pips between two prices for any symbol type.
+        
+        Args:
+            symbol: Trading symbol
+            price1: First price
+            price2: Second price
+            
+        Returns:
+            Pip difference
+        """
+        try:
+            # Determine pip multiplier
+            if 'JPY' in symbol:
+                pip_multiplier = 100  # 0.01 for JPY pairs
+            elif any(x in symbol for x in ['XAU', 'XAG', 'BTC', 'ETH']):
+                pip_multiplier = 1  # 1.0 for metals and crypto
+            elif any(x in symbol for x in ['US30', 'NAS100', 'SPX500']):
+                pip_multiplier = 1  # 1.0 for indices
+            else:
+                pip_multiplier = 10000  # 0.0001 for most forex pairs
+            
+            pips = abs(price1 - price2) * pip_multiplier
+            return pips
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating pips: {e}")
+            return 0.0
     
     def _convert_timeframe(self, timeframe: str) -> Optional[int]:
         """

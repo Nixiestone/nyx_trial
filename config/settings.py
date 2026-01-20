@@ -2,6 +2,7 @@
 Trading Bot Configuration Settings - MT5 Version
 Author: BLESSING OMOREGIE
 
+All secret values go in config/secrets.env
 """
 
 import os
@@ -22,8 +23,6 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     AUTHOR: str = "BLESSING OMOREGIE"
     GITHUB_USERNAME: str = "Nixiestone"
-    REPO_NAME: str = "nyx_trial"
-    PROJECT_PATH: str = r"C:\Users\NIXIE\Desktop\projects\trading-bot\nyx_trial"
     
     # Environment - CHANGE THIS: development, testing, or production
     ENVIRONMENT: str = Field(default="development", env="ENVIRONMENT")
@@ -54,12 +53,12 @@ class Settings(BaseSettings):
         "EURUSD",
         "GBPUSD",
         "USDJPY",
-        "GBPJPY",
         "AUDUSD",
         "USDCAD",
-        "XAUUSD",  # Gold
-        "US30",    # Dow Jones
-        "BTCUSD"   # Bitcoin (if your broker supports it)
+        "GBPJPY",   # JPY pair
+        "XAUUSD",   # Gold
+        "US30",     # Dow Jones
+        "BTCUSD"    # Bitcoin (if your broker supports it)
     ]
     
     # Timeframes for Analysis - DO NOT CHANGE (SMC Strategy requirement)
@@ -97,10 +96,12 @@ class Settings(BaseSettings):
     RISK_PER_TRADE_PERCENT: float = 1.0  # Risk 1% per trade
     
     # Stop Loss and Take Profit - YOU CAN ADJUST
-    SL_PADDING_PIPS: float = 3.0  # Stop loss padding in pips
-    TP1_RISK_REWARD: float = 2  # First take profit at 2:1 RR
-    TP2_RISK_REWARD: float = 4.5  # Second take profit at 4.5:1 RR
+    SL_PADDING_PIPS: float = 3.0 # Stop loss padding in pips
+    MINIMUM_TP1_RR: 2.0    # Minimum Risk-Reward for TP1
+    TP1 = External liquidity (wherever it is)
+    TP2 = HTF liquidity (wherever it is)
     PARTIAL_CLOSE_TP1_PERCENT: float = 50.0  # Close 50% at TP1
+    MOVE_SL_TO_BREAKEVEN_AT_TP1: bool = True  # Move SL to entry when TP1 hit
     
     # Machine Learning Settings - DO NOT CHANGE
     ML_MODEL_1_TYPE: str = "random_forest"
@@ -123,9 +124,9 @@ class Settings(BaseSettings):
         "dailyfx",
         "reuters",
         "bloomberg",
+        "x(twitter)",
         "the-economist",
-        "financial-times",
-        "X(twitter)"
+        "financial-times"
     ]
     NEWS_FETCH_INTERVAL_MINUTES: int = 60  # Fetch news every hour
     
@@ -162,7 +163,7 @@ class Settings(BaseSettings):
     MARKET_UPDATE_INTERVAL_MINUTES: int = 60  # Update market data every hour
     
     # Auto Trading - CHANGE THIS WHEN READY
-    AUTO_TRADING_ENABLED: bool = Field(default=True, env="AUTO_TRADING_ENABLED")  # KEEP FALSE
+    AUTO_TRADING_ENABLED: bool = Field(default=False, env="AUTO_TRADING_ENABLED")  # KEEP FALSE
     
     # API Rate Limiting - DO NOT CHANGE
     API_RATE_LIMIT_CALLS: int = 1200
@@ -172,8 +173,8 @@ class Settings(BaseSettings):
     SMC_MSS_CONFIRMATION_CANDLES: int = 1  # Candles for MSS confirmation
     SMC_BOS_DOUBLE_BREAK_REQUIRED: bool = True  # Require double BOS
     SMC_FVG_MIN_SIZE_PERCENT: float = 0.1  # Minimum FVG size 0.1%
-    SMC_OB_LOOKBACK_CANDLES: int = 150  # Look back 150 candles for OB
-    SMC_BB_LOOKBACK_CANDLES: int = 150  # Look back 150 candles for BB
+    SMC_OB_LOOKBACK_CANDLES: int = 20  # Look back 20 candles for OB
+    SMC_BB_LOOKBACK_CANDLES: int = 30  # Look back 30 candles for BB
     
     # POI Selection Rules - DO NOT CHANGE
     POI_REQUIRE_INDUCEMENT: bool = True
@@ -199,7 +200,7 @@ class Settings(BaseSettings):
     BACKTEST_INITIAL_CAPITAL: float = 10000.0
     
     # MT5 Connection Settings
-    MT5_ENABLE_EXPERT_ADVISOR: bool = Field(default=True, env="MT5_ENABLE_EXPERT_ADVISOR")
+    MT5_ENABLE_EXPERT_ADVISOR: bool = Field(default=False, env="MT5_ENABLE_EXPERT_ADVISOR")
     MT5_MAGIC_NUMBER: int = Field(default=234000, env="MT5_MAGIC_NUMBER")
     MT5_DEVIATION: int = Field(default=20, env="MT5_DEVIATION")
     MT5_FILLING_MODE: str = Field(default="FOK", env="MT5_FILLING_MODE")  # FOK, IOC, or RETURN

@@ -160,7 +160,7 @@ Auto Trading: {'ENABLED' if settings.AUTO_TRADING_ENABLED else 'DISABLED'}
             self.notifier.send_error_alert("Trading Cycle", str(e))
     
     def execute_trade(self, signal: Dict):
-        """Execute a trading signal."""
+        """Execute a trading signal (market or pending order)."""
         
         try:
             self.logger.info(f"Executing trade for {signal['symbol']}...")
@@ -172,25 +172,59 @@ Auto Trading: {'ENABLED' if settings.AUTO_TRADING_ENABLED else 'DISABLED'}
                 signal['stop_loss']
             )
             
-            # Open position
-            result = self.executor.open_position(
-                symbol=signal['symbol'],
-                order_type=signal['direction'],
-                lot_size=lot_size,
-                stop_loss=signal['stop_loss'],
-                take_profit=signal['take_profit_1'],
-                comment=f"NYX {signal['scenario']}"
-            )
+            # Determine if market or pending order
+            immediate_execution = signal.get('immediate_execution', True)
+            order_type = signal.get('order_type_enum', 'MARKET')
             
-            if result:
-                self.logger.info(f"Trade executed successfully: Ticket {result.get('ticket', 'N/A')}")
-                self.notifier.send_trade_execution("OPENED", result)
-            else:
-                self.logger.error("Trade execution failed")
-                self.notifier.send_error_alert(
-                    "Trade Execution",
-                    f"Failed to open position for {signal['symbol']}"
+            if immediate_execution or order_type == 'MARKET':
+                # Execute market order
+                result = self.executor.open_position(
+                    symbol=signal['symbol'],
+                    order_type=signal['direction'],
+                    lot_size=lot_size,
+                    stop_loss=signal['stop_loss'],
+                    take_profit=signal['take_profit_1'],
+                    comment=f"NYX {signal['scenario']}"
                 )
+                
+                if result:
+                    self.logger.info(f"Market order executed: Ticket {result.get('ticket', 'N/A')}")
+                    self.notifier.send_trade_execution("OPENED", result)
+                else:
+                    self.logger.error("Market order execution failed")
+                    self.notifier.send_error_alert(
+                        "Trade Execution",
+                        f"Failed to open position for {signal['symbol']}"
+                    )
+            
+            else:
+                # Place pending order
+                result = self.executor.place_pending_order(
+                    symbol=signal['symbol'],
+                    order_type=order_type,
+                    lot_size=lot_size,
+                    entry_price=signal['entry_price'],
+                    stop_loss=signal['stop_loss'],
+                    take_profit=signal['take_profit_1'],
+                    comment=f"NYX {signal['scenario']}"
+                )
+                
+                if result:
+                    self.logger.info(f"Pending order placed: Order {result.get('order', 'N/A')}")
+                    # Send notification about pending order
+                    pending_details = {
+                        'symbol': signal['symbol'],
+                        'type': order_type,
+                        'entry_price': signal['entry_price'],
+                        'order': result.get('order', 'N/A')
+                    }
+                    self.notifier.send_pending_order_notification(pending_details)
+                else:
+                    self.logger.error("Pending order placement failed")
+                    self.notifier.send_error_alert(
+                        "Pending Order",
+                        f"Failed to place pending order for {signal['symbol']}"
+                    )
                 
         except Exception as e:
             self.logger.exception(f"Error executing trade: {e}")

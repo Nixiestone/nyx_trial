@@ -192,80 +192,91 @@ class SMCAnalyzer:
         scenario: ScenarioType,
         structure_break: StructureBreak,
         htf_context: Dict,
-        df_itf: pd.DataFrame,
-        df_ltf: pd.DataFrame
+        df_itf: pd.DataFrame
     ) -> Optional[PointOfInterest]:
         """
-        Select optimal POI using ELITE NIXIE SMC ENGINE logic.
-        
-        ELITE 3-STEP FILTER:
-        Step A: IDM Anchor (Inducement as zero point)
-        Step B: Search Zone (Primary scan within structural window)
-        Step C: Freshness Filter (50% mitigation + proximity check)
-        
-        PROXIMITY RULE: POI with FVG closest to it = Unicorn Setup (highest score)
+        Select optimal POI based on scenario and priority logic.
         
         Args:
             scenario: Trading scenario type
             structure_break: The structure break that occurred
             htf_context: HTF context
             df_itf: ITF DataFrame
-            df_ltf: LTF DataFrame
             
         Returns:
             Selected PointOfInterest or None
         """
         direction_str = "bullish" if structure_break.direction == TrendDirection.BULLISH else "bearish"
         
-        # Step A: Identify Inducement (IDM Anchor - Zero Point)
-        inducement = self.structure_detector.identify_inducement(df_ltf, structure_break)
-        inducement_index = inducement.index if inducement else len(df_ltf) - 1
-        
-        # Determine timeframe for POI detector
-        # Use LTF timeframe (M5 or M15) for elite candle lookback
-        ltf_timeframe = self.config.LTF_TIMEFRAME if hasattr(self, 'config') else "M15"
-        
-        # Initialize POI detector with elite logic
-        from .poi_detector import POIDetector
-        elite_poi_detector = POIDetector(timeframe=ltf_timeframe)
-        
-        # Step B: Search Zone - Detect POIs within Primary Scan window
-        order_blocks = elite_poi_detector.detect_order_blocks(
-            df_ltf,
+        # Get ITF POIs
+        order_blocks = self.poi_detector.detect_order_blocks(
+            df_itf,
             direction=direction_str,
-            inducement_index=inducement_index
+            structure_break_index=structure_break.break_index
         )
         
-        breaker_blocks = elite_poi_detector.detect_breaker_blocks(
-            df_ltf,
+        breaker_blocks = self.poi_detector.detect_breaker_blocks(
+            df_itf,
             direction=direction_str,
-            inducement_index=inducement_index
+            structure_break_index=structure_break.break_index
         )
         
-        fvgs = elite_poi_detector.detect_fair_value_gaps(
-            df_ltf,
+        fvgs = self.poi_detector.detect_fair_value_gaps(
+            df_itf,
             direction=direction_str
         )
         
-        # Step C: Select optimal POI using Elite Proximity Rule
-        scenario_str = "reversal" if scenario == ScenarioType.REVERSAL_MSS else "continuation"
-        
-        optimal_poi = elite_poi_detector.select_optimal_poi(
-            order_blocks,
-            breaker_blocks,
-            fvgs,
-            scenario=scenario_str
-        )
-        
-        if optimal_poi:
-            # Calculate Unicorn score for ML ensemble
-            unicorn_score = elite_poi_detector.get_unicorn_setup_score(optimal_poi, fvgs)
-            optimal_poi.unicorn_score = unicorn_score
+        # Scenario A (MSS): Prioritize OB, fallback to BB
+        if scenario == ScenarioType.REVERSAL_MSS:
+            # 1. Look for Order Block first
+            valid_obs = [ob for ob in order_blocks if ob.is_valid()]
+            if valid_obs:
+                # Select OB closest to current price
+                current_price = df_itf['close'].iloc[-1]
+                closest_ob = min(
+                    valid_obs,
+                    key=lambda ob: abs((ob.price_high + ob.price_low) / 2 - current_price)
+                )
+                # Check FVG overlap
+                closest_ob.fvg_overlap = self.poi_detector.check_fvg_overlap(closest_ob, fvgs)
+                return closest_ob
             
-            # Attach inducement info
-            optimal_poi.has_inducement = inducement is not None
+            # 2. Fallback to Breaker Block
+            valid_bbs = [bb for bb in breaker_blocks if bb.is_valid()]
+            if valid_bbs:
+                current_price = df_itf['close'].iloc[-1]
+                closest_bb = min(
+                    valid_bbs,
+                    key=lambda bb: abs((bb.price_high + bb.price_low) / 2 - current_price)
+                )
+                closest_bb.fvg_overlap = self.poi_detector.check_fvg_overlap(closest_bb, fvgs)
+                return closest_bb
         
-        return optimal_poi
+        # Scenario B (Double BOS): Prioritize BB, fallback to OB
+        elif scenario == ScenarioType.CONTINUATION_BOS:
+            # 1. Look for Breaker Block first (strong trend)
+            valid_bbs = [bb for bb in breaker_blocks if bb.is_valid()]
+            if valid_bbs:
+                current_price = df_itf['close'].iloc[-1]
+                closest_bb = min(
+                    valid_bbs,
+                    key=lambda bb: abs((bb.price_high + bb.price_low) / 2 - current_price)
+                )
+                closest_bb.fvg_overlap = self.poi_detector.check_fvg_overlap(closest_bb, fvgs)
+                return closest_bb
+            
+            # 2. Fallback to Order Block
+            valid_obs = [ob for ob in order_blocks if ob.is_valid()]
+            if valid_obs:
+                current_price = df_itf['close'].iloc[-1]
+                closest_ob = min(
+                    valid_obs,
+                    key=lambda ob: abs((ob.price_high + ob.price_low) / 2 - current_price)
+                )
+                closest_ob.fvg_overlap = self.poi_detector.check_fvg_overlap(closest_ob, fvgs)
+                return closest_ob
+        
+        return None
     
     def validate_entry_conditions(
         self,
@@ -314,19 +325,27 @@ class SMCAnalyzer:
         poi: PointOfInterest,
         direction: str,
         current_price: float,
-        htf_context: Dict
+        htf_context: Dict,
+        itf_structure: Dict,
+        symbol: str = "EURUSD"
     ) -> Dict:
         """
-        Phase 4: Calculate risk management levels.
+        Phase 4: Calculate risk management levels with proper TP placement.
+        
+        TP1: External liquidity (high/low formed before the pullback/inducement)
+        TP2: Next significant high/low on higher timeframe
+        Minimum R:R for TP1 is 1:2 (NO MAXIMUM - can be 1:20, 1:50, etc.)
         
         Args:
             poi: Selected Point of Interest
             direction: Trade direction ('BUY' or 'SELL')
             current_price: Current market price
             htf_context: HTF context for liquidity levels
+            itf_structure: ITF structure analysis for external liquidity
+            symbol: Trading symbol for pip calculation
             
         Returns:
-            Dictionary with entry, SL, and TP levels
+            Dictionary with entry, SL, and TP levels with accurate pips
         """
         # Calculate entry price
         if poi.poi_type == POIType.BREAKER_BLOCK:
@@ -334,49 +353,116 @@ class SMCAnalyzer:
         else:
             entry_price = poi.get_entry_price("standard")
         
-        # Calculate Stop Loss (distal line + padding)
+        # Determine pip value based on symbol type
+        if 'JPY' in symbol:
+            pip_value = 0.01  # JPY pairs
+        elif any(x in symbol for x in ['XAU', 'XAG', 'GOLD', 'SILVER']):
+            pip_value = 0.01  # Gold/Silver
+        elif any(x in symbol for x in ['BTC', 'ETH', 'CRYPTO']):
+            pip_value = 1.0  # Crypto
+        elif any(x in symbol for x in ['US30', 'NAS100', 'SPX500', 'US500', 'DOW', 'NASDAQ']):
+            pip_value = 1.0  # Indices
+        else:
+            pip_value = 0.0001  # Standard forex pairs
+        
+        # Calculate Stop Loss (distal line + padding in actual pip value)
         if direction == "BUY":
             distal_line = poi.price_low
-            stop_loss = distal_line - (self.sl_padding_pips * 0.0001)  # Assuming forex pips
+            stop_loss = distal_line - (self.sl_padding_pips * pip_value)
         else:  # SELL
             distal_line = poi.price_high
-            stop_loss = distal_line + (self.sl_padding_pips * 0.0001)
+            stop_loss = distal_line + (self.sl_padding_pips * pip_value)
         
-        # Calculate risk amount
+        # Calculate risk amount (actual price difference)
         risk_amount = abs(entry_price - stop_loss)
         
-        # Calculate Take Profits
+        # Calculate Take Profits based on liquidity zones
+        # NO MAXIMUM R:R - can be 1:2, 1:10, 1:50, whatever the market offers
         if direction == "BUY":
-            # TP1: Internal Range Liquidity (latest swing high)
-            tp1_target = htf_context.get('latest_swing_high')
-            if tp1_target:
-                take_profit_1 = tp1_target.price
-            else:
-                take_profit_1 = entry_price + (risk_amount * self.tp1_rr)
+            # TP1: External Liquidity (high formed before the pullback)
+            tp1_target = None
             
-            # TP2: External Range Liquidity (higher swing high)
-            swing_highs = htf_context.get('swing_highs', [])
-            if len(swing_highs) >= 2:
-                take_profit_2 = swing_highs[-2].price
+            # Look for the swing high that was broken before the pullback
+            swing_highs = itf_structure.get('swing_highs', [])
+            if len(swing_highs) >= 1:
+                # External liquidity is the most recent swing high
+                tp1_target = swing_highs[-1].price
+            
+            # If no swing high found or it's below entry, use minimum R:R
+            if tp1_target is None or tp1_target <= entry_price:
+                take_profit_1 = entry_price + (risk_amount * 2.0)  # Minimum 1:2
             else:
-                take_profit_2 = entry_price + (risk_amount * self.tp2_rr)
+                take_profit_1 = tp1_target
+            
+            # Ensure MINIMUM 1:2 R:R for TP1 (but allow higher)
+            min_tp1 = entry_price + (risk_amount * 2.0)
+            if take_profit_1 < min_tp1:
+                take_profit_1 = min_tp1
+            
+            # TP2: Next significant high on HTF (NO LIMIT on R:R)
+            tp2_target = None
+            htf_swing_highs = htf_context.get('swing_highs', [])
+            
+            # Find the next HTF swing high above TP1
+            for swing_high in reversed(htf_swing_highs):
+                if swing_high.price > take_profit_1:
+                    tp2_target = swing_high.price
+                    break
+            
+            # If found a valid HTF target, use it (regardless of R:R)
+            if tp2_target is not None and tp2_target > take_profit_1:
+                take_profit_2 = tp2_target
+            else:
+                # Fallback: minimum 1:3 R:R
+                take_profit_2 = entry_price + (risk_amount * 3.0)
+            
+            # Final check: TP2 must be above TP1
+            if take_profit_2 <= take_profit_1:
+                take_profit_2 = entry_price + (risk_amount * 3.0)
         
         else:  # SELL
-            # TP1: Internal Range Liquidity (latest swing low)
-            tp1_target = htf_context.get('latest_swing_low')
-            if tp1_target:
-                take_profit_1 = tp1_target.price
-            else:
-                take_profit_1 = entry_price - (risk_amount * self.tp1_rr)
+            # TP1: External Liquidity (low formed before the pullback)
+            tp1_target = None
             
-            # TP2: External Range Liquidity (lower swing low)
-            swing_lows = htf_context.get('swing_lows', [])
-            if len(swing_lows) >= 2:
-                take_profit_2 = swing_lows[-2].price
+            # Look for the swing low that was broken before the pullback
+            swing_lows = itf_structure.get('swing_lows', [])
+            if len(swing_lows) >= 1:
+                # External liquidity is the most recent swing low
+                tp1_target = swing_lows[-1].price
+            
+            # If no swing low found or it's above entry, use minimum R:R
+            if tp1_target is None or tp1_target >= entry_price:
+                take_profit_1 = entry_price - (risk_amount * 2.0)  # Minimum 1:2
             else:
-                take_profit_2 = entry_price - (risk_amount * self.tp2_rr)
+                take_profit_1 = tp1_target
+            
+            # Ensure MINIMUM 1:2 R:R for TP1 (but allow higher)
+            max_tp1 = entry_price - (risk_amount * 2.0)
+            if take_profit_1 > max_tp1:
+                take_profit_1 = max_tp1
+            
+            # TP2: Next significant low on HTF (NO LIMIT on R:R)
+            tp2_target = None
+            htf_swing_lows = htf_context.get('swing_lows', [])
+            
+            # Find the next HTF swing low below TP1
+            for swing_low in reversed(htf_swing_lows):
+                if swing_low.price < take_profit_1:
+                    tp2_target = swing_low.price
+                    break
+            
+            # If found a valid HTF target, use it (regardless of R:R)
+            if tp2_target is not None and tp2_target < take_profit_1:
+                take_profit_2 = tp2_target
+            else:
+                # Fallback: minimum 1:3 R:R
+                take_profit_2 = entry_price - (risk_amount * 3.0)
+            
+            # Final check: TP2 must be below TP1
+            if take_profit_2 >= take_profit_1:
+                take_profit_2 = entry_price - (risk_amount * 3.0)
         
-        # Calculate actual risk-reward ratios
+        # Calculate ACTUAL risk-reward ratios (can be any value >= 2.0)
         rr_tp1 = abs(take_profit_1 - entry_price) / risk_amount if risk_amount > 0 else 0
         rr_tp2 = abs(take_profit_2 - entry_price) / risk_amount if risk_amount > 0 else 0
         
@@ -387,7 +473,8 @@ class SMCAnalyzer:
             'take_profit_2': take_profit_2,
             'risk_amount': risk_amount,
             'risk_reward_tp1': rr_tp1,
-            'risk_reward_tp2': rr_tp2
+            'risk_reward_tp2': rr_tp2,
+            'pip_value': pip_value  # Include for accurate pip calculations
         }
     
     def generate_trading_setup(
@@ -395,27 +482,18 @@ class SMCAnalyzer:
         df_htf: pd.DataFrame,
         df_itf: pd.DataFrame,
         df_ltf: pd.DataFrame,
+        symbol: str,
         ml_prediction: Optional[Dict] = None,
         sentiment_score: Optional[Dict] = None
     ) -> Optional[TradingSetup]:
         """
-        Generate complete trading setup using ELITE NIXIE SMC ENGINE.
-        
-        ELITE CANDLE-LOOKBACK LOGIC:
-        - M5: Primary scan 120 candles (10 hours), Max POI distance 40 candles
-        - M15: Primary scan 150 candles (37.5 hours), Max POI distance 60 candles
-        
-        3-STEP ELITE FILTER:
-        Step A: IDM Anchor (Inducement = Zero Point)
-        Step B: Search Zone (Primary scan within structural window)
-        Step C: Freshness Filter (50% mitigation + proximity)
-        
-        UNICORN SETUP: POI with closest FVG = highest ML ensemble score
+        Generate complete trading setup by combining all analysis phases.
         
         Args:
-            df_htf: Higher timeframe DataFrame (4H/Daily)
-            df_itf: Intermediate timeframe DataFrame (1H/15M)
-            df_ltf: Lower timeframe DataFrame (15M/5M)
+            df_htf: Higher timeframe DataFrame
+            df_itf: Intermediate timeframe DataFrame
+            df_ltf: Lower timeframe DataFrame
+            symbol: Trading symbol (for accurate pip calculations)
             ml_prediction: ML model predictions (optional)
             sentiment_score: Sentiment analysis results (optional)
             
@@ -435,8 +513,11 @@ class SMCAnalyzer:
         if scenario == ScenarioType.NO_SETUP or structure_break is None:
             return None
         
-        # Phase 2.5: ELITE POI Selection using LTF with candle-lookback logic
-        poi = self.select_optimal_poi(scenario, structure_break, htf_context, df_itf, df_ltf)
+        # Get ITF structure analysis (needed for TP calculation)
+        itf_structure = self.structure_detector.analyze_market_structure(df_itf)
+        
+        # Select POI
+        poi = self.select_optimal_poi(scenario, structure_break, htf_context, df_itf)
         
         if poi is None:
             return None
@@ -448,26 +529,32 @@ class SMCAnalyzer:
             structure_break
         )
         
-        # ELITE: FVG validation is critical for Unicorn setups
+        # Check validation requirements
         if not fvg_validation:
             return None
         
         # Determine direction
         direction = "BUY" if structure_break.direction == TrendDirection.BULLISH else "SELL"
         
-        # Phase 4: Calculate risk levels
+        # Phase 4: Calculate risk levels with symbol-specific pip values
         current_price = df_ltf['close'].iloc[-1]
-        risk_levels = self.calculate_risk_levels(poi, direction, current_price, htf_context)
+        risk_levels = self.calculate_risk_levels(
+            poi, 
+            direction, 
+            current_price, 
+            htf_context,
+            itf_structure,
+            symbol  # Pass symbol for accurate pip calculation
+        )
         
-        # Calculate confidence score with Unicorn bonus
+        # Calculate confidence score
         confidence_score = self._calculate_confidence_score(
             scenario=scenario,
             inducement_swept=inducement_swept,
             fvg_validation=fvg_validation,
             ml_prediction=ml_prediction,
             sentiment_score=sentiment_score,
-            direction=direction,
-            poi=poi  # Pass POI for Unicorn scoring
+            direction=direction
         )
         
         # Create trading setup
@@ -497,13 +584,10 @@ class SMCAnalyzer:
         fvg_validation: bool,
         ml_prediction: Optional[Dict],
         sentiment_score: Optional[Dict],
-        direction: str,
-        poi: Optional[PointOfInterest] = None
+        direction: str
     ) -> float:
         """
-        Calculate confidence score with ELITE UNICORN BONUS.
-        
-        UNICORN SETUP BONUS: POI with FVG overlap gets highest score.
+        Calculate confidence score for the trading setup.
         
         Args:
             scenario: Trading scenario
@@ -512,46 +596,35 @@ class SMCAnalyzer:
             ml_prediction: ML predictions
             sentiment_score: Sentiment analysis
             direction: Trade direction
-            poi: Point of Interest (for Unicorn scoring)
             
         Returns:
             Confidence score between 0 and 1
         """
         score = 0.0
         
-        # Base score from SMC components (50% weight)
+        # Base score from SMC components (60% weight)
         smc_score = 0.0
         
-        # Scenario type (10%)
+        # Scenario type (15%)
         if scenario == ScenarioType.CONTINUATION_BOS:
-            smc_score += 0.10  # Higher confidence for continuation
+            smc_score += 0.15  # Higher confidence for continuation
         else:
-            smc_score += 0.07  # Lower for reversal
+            smc_score += 0.10  # Lower for reversal
         
-        # Inducement swept (10%)
+        # Inducement swept (15%)
         if inducement_swept:
-            smc_score += 0.10
+            smc_score += 0.15
         
-        # FVG validation (10%)
+        # FVG validation (15%)
         if fvg_validation:
-            smc_score += 0.10
+            smc_score += 0.15
         
-        # POI quality (10%)
-        if poi and poi.is_valid():
-            smc_score += 0.10
-        
-        # ELITE UNICORN BONUS (10%)
-        if poi and hasattr(poi, 'unicorn_score'):
-            # Unicorn setup gets massive boost
-            unicorn_bonus = poi.unicorn_score * 0.10
-            smc_score += unicorn_bonus
-        elif poi and poi.fvg_overlap:
-            # Even without score, FVG overlap is worth 7%
-            smc_score += 0.07
+        # POI quality (15%)
+        smc_score += 0.15  # Assume valid POI
         
         score += smc_score
         
-        # ML prediction score (30% weight) - ELITE: Unicorn setups score higher
+        # ML prediction score (25% weight)
         if ml_prediction:
             ml_score = 0.0
             ensemble_prediction = ml_prediction.get('ensemble', 0)
@@ -560,15 +633,11 @@ class SMCAnalyzer:
             # Check if ML agrees with direction
             if (direction == "BUY" and ensemble_prediction == 1) or \
                (direction == "SELL" and ensemble_prediction == -1):
-                ml_score = 0.30 * ml_confidence
-                
-                # UNICORN BOOST: If it's a Unicorn setup AND ML agrees, add bonus
-                if poi and hasattr(poi, 'unicorn_score') and poi.unicorn_score >= 0.85:
-                    ml_score *= 1.15  # 15% boost to ML score
+                ml_score = 0.25 * ml_confidence
             
             score += ml_score
         
-        # Sentiment score (20% weight)
+        # Sentiment score (15% weight)
         if sentiment_score:
             sentiment_value = sentiment_score.get('score', 0.0)
             sentiment_confidence = sentiment_score.get('confidence', 0.0)
@@ -576,7 +645,7 @@ class SMCAnalyzer:
             # Check if sentiment agrees with direction
             if (direction == "BUY" and sentiment_value > 0) or \
                (direction == "SELL" and sentiment_value < 0):
-                score += 0.20 * sentiment_confidence
+                score += 0.15 * sentiment_confidence
         
         # Normalize to 0-1 range
         score = min(1.0, max(0.0, score))
@@ -587,7 +656,7 @@ class SMCAnalyzer:
         self,
         setup: TradingSetup,
         min_confidence: float = 0.6,
-        min_risk_reward: float = 1.5
+        min_risk_reward: float = 2.0  # Updated to minimum 1:2
     ) -> Tuple[bool, str]:
         """
         Determine if a trade should be taken based on criteria.
@@ -595,7 +664,7 @@ class SMCAnalyzer:
         Args:
             setup: Trading setup
             min_confidence: Minimum confidence score required
-            min_risk_reward: Minimum risk-reward ratio required
+            min_risk_reward: Minimum risk-reward ratio required (default 1:2)
             
         Returns:
             Tuple of (should_trade, reason)
@@ -604,9 +673,9 @@ class SMCAnalyzer:
         if setup.confidence_score < min_confidence:
             return False, f"Confidence too low: {setup.confidence_score} < {min_confidence}"
         
-        # Check risk-reward ratio
+        # Check risk-reward ratio (minimum 1:2)
         if setup.risk_reward_tp1 < min_risk_reward:
-            return False, f"Risk-reward too low: {setup.risk_reward_tp1} < {min_risk_reward}"
+            return False, f"Risk-reward too low: 1:{setup.risk_reward_tp1:.2f} < 1:{min_risk_reward}"
         
         # Check FVG validation
         if not setup.fvg_validation:

@@ -67,12 +67,23 @@ class DataValidator:
         return True, "Valid"
     
     @staticmethod
-    def validate_trading_symbol(symbol: str) -> Tuple[bool, str]:
+    def validate_trading_symbol(symbol: str, platform: str = "mt5") -> Tuple[bool, str]:
         """
-        Validate trading symbol format.
+        Validate trading symbol format for MT5 or crypto exchanges.
+        
+        MT5 Format Examples:
+            - Forex: EURUSD, GBPUSD, USDJPY
+            - Metals: XAUUSD, XAGUSD
+            - Indices: US30, NAS100, SPX500
+            - Crypto: BTCUSD, ETHUSD (if broker supports)
+            - Some brokers: EURUSDpro, EURUSD.raw, EURUSD_sb
+        
+        Crypto Format Examples:
+            - BTC/USDT, ETH/USDT
         
         Args:
-            symbol: Trading pair symbol (e.g., 'BTC/USDT')
+            symbol: Trading pair symbol
+            platform: 'mt5' or 'crypto'
             
         Returns:
             Tuple of (is_valid, error_message)
@@ -80,25 +91,1838 @@ class DataValidator:
         if not symbol:
             return False, "Symbol is empty"
         
-        # Check format (BASE/QUOTE)
-        if '/' not in symbol:
-            return False, "Symbol must be in BASE/QUOTE format (e.g., BTC/USDT)"
+        # Remove any whitespace
+        symbol = symbol.strip()
         
-        parts = symbol.split('/')
-        if len(parts) != 2:
-            return False, "Symbol must have exactly one '/' separator"
+        if platform.lower() == "mt5":
+            # MT5 symbols don't use '/' separator
+            # Valid characters: letters, numbers, underscore, dot, dash
+            # Examples: EURUSD, US30, XAUUSD, EURUSDpro, EURUSD.raw, EURUSD_sb
+            
+            if '/' in symbol:
+                return False, "MT5 symbols don't use '/' separator (use EURUSD not EUR/USD)"
+            
+            # Check length (MT5 symbols typically 5-12 characters)
+            if len(symbol) < 3:
+                return False, "Symbol too short"
+            
+            if len(symbol) > 20:
+                return False, "Symbol too long (max 20 characters for MT5)"
+            
+            # Check for valid MT5 characters: alphanumeric, underscore, dot, dash
+            import re
+            if not re.match(r'^[A-Za-z0-9._-]+
+    
+    @staticmethod
+    def validate_timeframe(timeframe: str) -> Tuple[bool, str]:
+        """
+        Validate timeframe format.
         
-        base, quote = parts
+        Args:
+            timeframe: Timeframe string (e.g., '1h', '15m', '4h', '1d')
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        valid_timeframes = [
+            '1m', '3m', '5m', '15m', '30m',
+            '1h', '2h', '4h', '6h', '12h',
+            '1d', '3d', '1w', '1M'
+        ]
         
-        # Check base and quote are not empty
-        if not base or not quote:
-            return False, "Base or quote currency is empty"
-        
-        # Check for valid characters (alphanumeric only)
-        if not base.isalnum() or not quote.isalnum():
-            return False, "Symbol contains invalid characters"
+        if timeframe not in valid_timeframes:
+            return False, f"Invalid timeframe. Must be one of: {valid_timeframes}"
         
         return True, "Valid"
+    
+    @staticmethod
+    def validate_trade_signal(signal: Dict, platform: str = "mt5") -> Tuple[bool, str]:
+        """
+        Validate trade signal structure and values.
+        
+        Args:
+            signal: Trading signal dictionary
+            platform: 'mt5' or 'crypto'
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = [
+            'symbol', 'direction', 'entry_price',
+            'stop_loss', 'take_profit_1', 'take_profit_2'
+        ]
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in signal]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate symbol
+        is_valid, msg = DataValidator.validate_trading_symbol(signal['symbol'], platform=platform)
+        if not is_valid:
+            return False, f"Invalid symbol: {msg}"
+        
+        # Validate direction
+        if signal['direction'] not in ['BUY', 'SELL']:
+            return False, "Direction must be 'BUY' or 'SELL'"
+        
+        # Validate prices are positive
+        price_fields = ['entry_price', 'stop_loss', 'take_profit_1', 'take_profit_2']
+        for field in price_fields:
+            if signal[field] <= 0:
+                return False, f"{field} must be positive"
+        
+        # Validate price relationships for BUY signals
+        if signal['direction'] == 'BUY':
+            if signal['stop_loss'] >= signal['entry_price']:
+                return False, "For BUY: stop_loss must be below entry_price"
+            if signal['take_profit_1'] <= signal['entry_price']:
+                return False, "For BUY: take_profit_1 must be above entry_price"
+            if signal['take_profit_2'] <= signal['take_profit_1']:
+                return False, "For BUY: take_profit_2 must be above take_profit_1"
+        
+        # Validate price relationships for SELL signals
+        if signal['direction'] == 'SELL':
+            if signal['stop_loss'] <= signal['entry_price']:
+                return False, "For SELL: stop_loss must be above entry_price"
+            if signal['take_profit_1'] >= signal['entry_price']:
+                return False, "For SELL: take_profit_1 must be below entry_price"
+            if signal['take_profit_2'] >= signal['take_profit_1']:
+                return False, "For SELL: take_profit_2 must be below take_profit_1"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_risk_parameters(params: Dict) -> Tuple[bool, str]:
+        """
+        Validate risk management parameters.
+        
+        Args:
+            params: Risk parameters dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = [
+            'position_size_percent',
+            'max_daily_loss_percent',
+            'max_open_positions'
+        ]
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in params]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate position size
+        if not 0 < params['position_size_percent'] <= 100:
+            return False, "position_size_percent must be between 0 and 100"
+        
+        if params['position_size_percent'] > 10:
+            return False, "position_size_percent should not exceed 10% (high risk)"
+        
+        # Validate max daily loss
+        if not 0 < params['max_daily_loss_percent'] <= 100:
+            return False, "max_daily_loss_percent must be between 0 and 100"
+        
+        # Validate max open positions
+        if not isinstance(params['max_open_positions'], int) or params['max_open_positions'] < 1:
+            return False, "max_open_positions must be a positive integer"
+        
+        if params['max_open_positions'] > 10:
+            return False, "max_open_positions should not exceed 10 (high risk)"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_ml_prediction(prediction: Dict) -> Tuple[bool, str]:
+        """
+        Validate machine learning prediction output.
+        
+        Args:
+            prediction: ML prediction dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = ['model1', 'model2', 'model3', 'ensemble', 'confidence']
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in prediction]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate prediction values (-1, 0, or 1)
+        for model in ['model1', 'model2', 'model3', 'ensemble']:
+            if prediction[model] not in [-1, 0, 1]:
+                return False, f"{model} prediction must be -1 (sell), 0 (neutral), or 1 (buy)"
+        
+        # Validate confidence score
+        if not 0 <= prediction['confidence'] <= 1:
+            return False, "confidence must be between 0 and 1"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_sentiment_score(sentiment: Dict) -> Tuple[bool, str]:
+        """
+        Validate sentiment analysis output.
+        
+        Args:
+            sentiment: Sentiment analysis dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = ['score', 'label', 'confidence']
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in sentiment]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate score range
+        if not -1 <= sentiment['score'] <= 1:
+            return False, "sentiment score must be between -1 and 1"
+        
+        # Validate label
+        if sentiment['label'] not in ['bullish', 'bearish', 'neutral']:
+            return False, "label must be 'bullish', 'bearish', or 'neutral'"
+        
+        # Validate confidence
+        if not 0 <= sentiment['confidence'] <= 1:
+            return False, "confidence must be between 0 and 1"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_poi(poi: Dict) -> Tuple[bool, str]:
+        """
+        Validate Point of Interest (POI) structure.
+        
+        Args:
+            poi: POI dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = [
+            'type', 'price_high', 'price_low',
+            'triggered_structure', 'has_inducement',
+            'is_unmitigated', 'distance_to_liquidity'
+        ]
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in poi]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate POI type
+        if poi['type'] not in ['OB', 'BB', 'FVG']:
+            return False, "POI type must be 'OB' (Order Block), 'BB' (Breaker Block), or 'FVG' (Fair Value Gap)"
+        
+        # Validate prices
+        if poi['price_high'] <= poi['price_low']:
+            return False, "price_high must be greater than price_low"
+        
+        # Validate boolean fields
+        for field in ['triggered_structure', 'has_inducement', 'is_unmitigated']:
+            if not isinstance(poi[field], bool):
+                return False, f"{field} must be boolean"
+        
+        # Validate POI selection rules
+        if not poi['triggered_structure']:
+            return False, "POI must trigger a shift in market structure or break of structure"
+        
+        if not poi['has_inducement']:
+            return False, "POI must have inducement or liquidity protecting it"
+        
+        if not poi['is_unmitigated']:
+            return False, "POI must be unmitigated"
+        
+        return True, "Valid"
+
+
+class ConfigValidator:
+    """Validates bot configuration."""
+    
+    @staticmethod
+    def validate_api_key(api_key: str, key_name: str = "API Key") -> Tuple[bool, str]:
+        """
+        Validate API key format.
+        
+        Args:
+            api_key: API key string
+            key_name: Name of the key for error messages
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not api_key:
+            return False, f"{key_name} is empty"
+        
+        if len(api_key) < 10:
+            return False, f"{key_name} is too short"
+        
+        # Check for placeholder values
+        placeholder_keywords = [
+            'your_', 'example', 'test', 'demo', 'placeholder',
+            'xxx', '123', 'abc', 'key_here'
+        ]
+        
+        if any(keyword in api_key.lower() for keyword in placeholder_keywords):
+            return False, f"{key_name} appears to be a placeholder value"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_telegram_chat_id(chat_id: str) -> Tuple[bool, str]:
+        """
+        Validate Telegram chat ID format.
+        
+        Args:
+            chat_id: Telegram chat ID
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not chat_id:
+            return False, "Chat ID is empty"
+        
+        # Remove leading/trailing whitespace
+        chat_id = chat_id.strip()
+        
+        # Check if it's numeric or starts with -
+        if not (chat_id.lstrip('-').isdigit()):
+            return False, "Chat ID must be numeric"
+        
+        return True, "Valid"
+
+
+class MT5SymbolHelper:
+    """Helper functions for MT5 symbol handling."""
+    
+    @staticmethod
+    def normalize_symbol(symbol: str) -> str:
+        """
+        Normalize MT5 symbol format.
+        
+        Args:
+            symbol: Symbol in any format
+            
+        Returns:
+            Normalized symbol
+        """
+        # Remove whitespace
+        symbol = symbol.strip().upper()
+        
+        # Convert crypto format to MT5 format
+        if '/' in symbol:
+            # BTC/USDT -> BTCUSDT
+            symbol = symbol.replace('/', '')
+        
+        return symbol
+    
+    @staticmethod
+    def get_symbol_info(symbol: str) -> Dict:
+        """
+        Get information about an MT5 symbol.
+        
+        Args:
+            symbol: MT5 symbol
+            
+        Returns:
+            Dictionary with symbol information
+        """
+        symbol = symbol.upper()
+        
+        # Detect symbol type
+        symbol_type = "unknown"
+        base = ""
+        quote = ""
+        
+        # Forex (6 characters, all letters)
+        if len(symbol) == 6 and symbol.isalpha():
+            symbol_type = "forex"
+            base = symbol[:3]
+            quote = symbol[3:]
+        
+        # Metals (starts with X)
+        elif symbol.startswith('X') and len(symbol) >= 6:
+            symbol_type = "metal"
+            base = symbol[:3]  # XAU, XAG
+            quote = symbol[3:6]  # USD
+        
+        # Indices (letters + numbers)
+        elif any(c.isdigit() for c in symbol) and any(c.isalpha() for c in symbol):
+            symbol_type = "index"
+            base = symbol
+            quote = ""
+        
+        # Crypto (ends with USD or USDT)
+        elif symbol.endswith('USDT') or symbol.endswith('USD'):
+            symbol_type = "crypto"
+            if symbol.endswith('USDT'):
+                base = symbol[:-4]
+                quote = 'USDT'
+            else:
+                base = symbol[:-3]
+                quote = 'USD'
+        
+        return {
+            'symbol': symbol,
+            'type': symbol_type,
+            'base': base,
+            'quote': quote,
+            'is_forex': symbol_type == "forex",
+            'is_metal': symbol_type == "metal",
+            'is_index': symbol_type == "index",
+            'is_crypto': symbol_type == "crypto"
+        }
+    
+    @staticmethod
+    def convert_to_standard_format(symbol: str) -> str:
+        """
+        Convert MT5 symbol to standard display format.
+        
+        Args:
+            symbol: MT5 symbol (e.g., EURUSD, XAUUSD)
+            
+        Returns:
+            Standard format (e.g., EUR/USD, XAU/USD)
+        """
+        info = MT5SymbolHelper.get_symbol_info(symbol)
+        
+        if info['type'] in ['forex', 'metal', 'crypto']:
+            if info['base'] and info['quote']:
+                return f"{info['base']}/{info['quote']}"
+        
+        return symbol
+    
+    @staticmethod
+    def get_pip_value(symbol: str) -> float:
+        """
+        Get pip value for a symbol.
+        
+        Args:
+            symbol: MT5 symbol
+            
+        Returns:
+            Pip value (0.0001 for most forex, 0.01 for JPY pairs, etc.)
+        """
+        info = MT5SymbolHelper.get_symbol_info(symbol)
+        
+        # JPY pairs use 0.01 as pip
+        if info['quote'] == 'JPY':
+            return 0.01
+        
+        # Most forex pairs use 0.0001
+        elif info['type'] == 'forex':
+            return 0.0001
+        
+        # Metals vary
+        elif info['type'] == 'metal':
+            if info['base'] == 'XAU':  # Gold
+                return 0.01
+            elif info['base'] == 'XAG':  # Silver
+                return 0.001
+        
+        # Indices
+        elif info['type'] == 'index':
+            return 1.0
+        
+        # Crypto
+        elif info['type'] == 'crypto':
+            return 1.0
+        
+        # Default
+        return 0.0001
+
+
+if __name__ == "__main__":
+    # Test validators
+    print("Testing Data Validators...")
+    
+    # Test OHLCV validation
+    df = pd.DataFrame({
+        'open': [100, 101, 102],
+        'high': [105, 106, 107],
+        'low': [99, 100, 101],
+        'close': [103, 104, 105],
+        'volume': [1000, 1100, 1200]
+    })
+    is_valid, msg = DataValidator.validate_ohlcv_dataframe(df)
+    print(f"\nOHLCV Validation: {is_valid} - {msg}")
+    
+    # Test MT5 symbol validation
+    print("\n=== MT5 Symbol Validation ===")
+    mt5_symbols = [
+        'EURUSD',      # Standard forex
+        'GBPUSD',      # Standard forex
+        'USDJPY',      # JPY pair
+        'XAUUSD',      # Gold
+        'XAGUSD',      # Silver
+        'US30',        # Index
+        'NAS100',      # Index
+        'BTCUSD',      # Crypto
+        'EURUSDpro',   # With suffix
+        'EURUSD.raw',  # With dot suffix
+        'EURUSD_sb',   # With underscore
+        'EUR/USD',     # Wrong format (crypto style)
+        'ABC',         # Too short
+        'TOOLONGSYMBOLNAME123',  # Too long
+    ]
+    
+    for symbol in mt5_symbols:
+        is_valid, msg = DataValidator.validate_trading_symbol(symbol, platform="mt5")
+        status = "✓" if is_valid else "✗"
+        print(f"{status} {symbol:20} - {msg}")
+    
+    # Test crypto symbol validation
+    print("\n=== Crypto Symbol Validation ===")
+    crypto_symbols = [
+        'BTC/USDT',    # Valid
+        'ETH/USDT',    # Valid
+        'BTCUSDT',     # Wrong (no separator)
+        'BTC/USD/EUR', # Wrong (multiple separators)
+    ]
+    
+    for symbol in crypto_symbols:
+        is_valid, msg = DataValidator.validate_trading_symbol(symbol, platform="crypto")
+        status = "✓" if is_valid else "✗"
+        print(f"{status} {symbol:15} - {msg}")
+    
+    # Test MT5 Symbol Helper
+    print("\n=== MT5 Symbol Helper ===")
+    test_symbols = ['EURUSD', 'XAUUSD', 'US30', 'BTCUSD', 'GBPJPY']
+    
+    for symbol in test_symbols:
+        info = MT5SymbolHelper.get_symbol_info(symbol)
+        standard = MT5SymbolHelper.convert_to_standard_format(symbol)
+        pip = MT5SymbolHelper.get_pip_value(symbol)
+        
+        print(f"\n{symbol}:")
+        print(f"  Type: {info['type']}")
+        print(f"  Base/Quote: {info['base']}/{info['quote']}")
+        print(f"  Standard: {standard}")
+        print(f"  Pip Value: {pip}")
+    
+    # Test signal validation (MT5 format)
+    print("\n=== Signal Validation (MT5) ===")
+    signal = {
+        'symbol': 'EURUSD',  # MT5 format (no slash)
+        'direction': 'BUY',
+        'entry_price': 1.10000,
+        'stop_loss': 1.09500,
+        'take_profit_1': 1.10750,
+        'take_profit_2': 1.11500
+    }
+    is_valid, msg = DataValidator.validate_trade_signal(signal)
+    print(f"MT5 Signal: {is_valid} - {msg}")
+    
+    print("\n=== All validator tests completed! ===")
+, symbol):
+                return False, "Symbol contains invalid characters for MT5"
+            
+            # Common MT5 symbol patterns
+            forex_pattern = r'^[A-Z]{6}
+    
+    @staticmethod
+    def validate_timeframe(timeframe: str) -> Tuple[bool, str]:
+        """
+        Validate timeframe format.
+        
+        Args:
+            timeframe: Timeframe string (e.g., '1h', '15m', '4h', '1d')
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        valid_timeframes = [
+            '1m', '3m', '5m', '15m', '30m',
+            '1h', '2h', '4h', '6h', '12h',
+            '1d', '3d', '1w', '1M'
+        ]
+        
+        if timeframe not in valid_timeframes:
+            return False, f"Invalid timeframe. Must be one of: {valid_timeframes}"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_trade_signal(signal: Dict) -> Tuple[bool, str]:
+        """
+        Validate trade signal structure and values.
+        
+        Args:
+            signal: Trading signal dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = [
+            'symbol', 'direction', 'entry_price',
+            'stop_loss', 'take_profit_1', 'take_profit_2'
+        ]
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in signal]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate symbol
+        is_valid, msg = DataValidator.validate_trading_symbol(signal['symbol'])
+        if not is_valid:
+            return False, f"Invalid symbol: {msg}"
+        
+        # Validate direction
+        if signal['direction'] not in ['BUY', 'SELL']:
+            return False, "Direction must be 'BUY' or 'SELL'"
+        
+        # Validate prices are positive
+        price_fields = ['entry_price', 'stop_loss', 'take_profit_1', 'take_profit_2']
+        for field in price_fields:
+            if signal[field] <= 0:
+                return False, f"{field} must be positive"
+        
+        # Validate price relationships for BUY signals
+        if signal['direction'] == 'BUY':
+            if signal['stop_loss'] >= signal['entry_price']:
+                return False, "For BUY: stop_loss must be below entry_price"
+            if signal['take_profit_1'] <= signal['entry_price']:
+                return False, "For BUY: take_profit_1 must be above entry_price"
+            if signal['take_profit_2'] <= signal['take_profit_1']:
+                return False, "For BUY: take_profit_2 must be above take_profit_1"
+        
+        # Validate price relationships for SELL signals
+        if signal['direction'] == 'SELL':
+            if signal['stop_loss'] <= signal['entry_price']:
+                return False, "For SELL: stop_loss must be above entry_price"
+            if signal['take_profit_1'] >= signal['entry_price']:
+                return False, "For SELL: take_profit_1 must be below entry_price"
+            if signal['take_profit_2'] >= signal['take_profit_1']:
+                return False, "For SELL: take_profit_2 must be below take_profit_1"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_risk_parameters(params: Dict) -> Tuple[bool, str]:
+        """
+        Validate risk management parameters.
+        
+        Args:
+            params: Risk parameters dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = [
+            'position_size_percent',
+            'max_daily_loss_percent',
+            'max_open_positions'
+        ]
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in params]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate position size
+        if not 0 < params['position_size_percent'] <= 100:
+            return False, "position_size_percent must be between 0 and 100"
+        
+        if params['position_size_percent'] > 10:
+            return False, "position_size_percent should not exceed 10% (high risk)"
+        
+        # Validate max daily loss
+        if not 0 < params['max_daily_loss_percent'] <= 100:
+            return False, "max_daily_loss_percent must be between 0 and 100"
+        
+        # Validate max open positions
+        if not isinstance(params['max_open_positions'], int) or params['max_open_positions'] < 1:
+            return False, "max_open_positions must be a positive integer"
+        
+        if params['max_open_positions'] > 10:
+            return False, "max_open_positions should not exceed 10 (high risk)"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_ml_prediction(prediction: Dict) -> Tuple[bool, str]:
+        """
+        Validate machine learning prediction output.
+        
+        Args:
+            prediction: ML prediction dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = ['model1', 'model2', 'model3', 'ensemble', 'confidence']
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in prediction]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate prediction values (-1, 0, or 1)
+        for model in ['model1', 'model2', 'model3', 'ensemble']:
+            if prediction[model] not in [-1, 0, 1]:
+                return False, f"{model} prediction must be -1 (sell), 0 (neutral), or 1 (buy)"
+        
+        # Validate confidence score
+        if not 0 <= prediction['confidence'] <= 1:
+            return False, "confidence must be between 0 and 1"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_sentiment_score(sentiment: Dict) -> Tuple[bool, str]:
+        """
+        Validate sentiment analysis output.
+        
+        Args:
+            sentiment: Sentiment analysis dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = ['score', 'label', 'confidence']
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in sentiment]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate score range
+        if not -1 <= sentiment['score'] <= 1:
+            return False, "sentiment score must be between -1 and 1"
+        
+        # Validate label
+        if sentiment['label'] not in ['bullish', 'bearish', 'neutral']:
+            return False, "label must be 'bullish', 'bearish', or 'neutral'"
+        
+        # Validate confidence
+        if not 0 <= sentiment['confidence'] <= 1:
+            return False, "confidence must be between 0 and 1"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_poi(poi: Dict) -> Tuple[bool, str]:
+        """
+        Validate Point of Interest (POI) structure.
+        
+        Args:
+            poi: POI dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = [
+            'type', 'price_high', 'price_low',
+            'triggered_structure', 'has_inducement',
+            'is_unmitigated', 'distance_to_liquidity'
+        ]
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in poi]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate POI type
+        if poi['type'] not in ['OB', 'BB', 'FVG']:
+            return False, "POI type must be 'OB' (Order Block), 'BB' (Breaker Block), or 'FVG' (Fair Value Gap)"
+        
+        # Validate prices
+        if poi['price_high'] <= poi['price_low']:
+            return False, "price_high must be greater than price_low"
+        
+        # Validate boolean fields
+        for field in ['triggered_structure', 'has_inducement', 'is_unmitigated']:
+            if not isinstance(poi[field], bool):
+                return False, f"{field} must be boolean"
+        
+        # Validate POI selection rules
+        if not poi['triggered_structure']:
+            return False, "POI must trigger a shift in market structure or break of structure"
+        
+        if not poi['has_inducement']:
+            return False, "POI must have inducement or liquidity protecting it"
+        
+        if not poi['is_unmitigated']:
+            return False, "POI must be unmitigated"
+        
+        return True, "Valid"
+
+
+class ConfigValidator:
+    """Validates bot configuration."""
+    
+    @staticmethod
+    def validate_api_key(api_key: str, key_name: str = "API Key") -> Tuple[bool, str]:
+        """
+        Validate API key format.
+        
+        Args:
+            api_key: API key string
+            key_name: Name of the key for error messages
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not api_key:
+            return False, f"{key_name} is empty"
+        
+        if len(api_key) < 10:
+            return False, f"{key_name} is too short"
+        
+        # Check for placeholder values
+        placeholder_keywords = [
+            'your_', 'example', 'test', 'demo', 'placeholder',
+            'xxx', '123', 'abc', 'key_here'
+        ]
+        
+        if any(keyword in api_key.lower() for keyword in placeholder_keywords):
+            return False, f"{key_name} appears to be a placeholder value"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_telegram_chat_id(chat_id: str) -> Tuple[bool, str]:
+        """
+        Validate Telegram chat ID format.
+        
+        Args:
+            chat_id: Telegram chat ID
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not chat_id:
+            return False, "Chat ID is empty"
+        
+        # Remove leading/trailing whitespace
+        chat_id = chat_id.strip()
+        
+        # Check if it's numeric or starts with -
+        if not (chat_id.lstrip('-').isdigit()):
+            return False, "Chat ID must be numeric"
+        
+        return True, "Valid"
+
+
+if __name__ == "__main__":
+    # Test validators
+    print("Testing Data Validators...")
+    
+    # Test OHLCV validation
+    df = pd.DataFrame({
+        'open': [100, 101, 102],
+        'high': [105, 106, 107],
+        'low': [99, 100, 101],
+        'close': [103, 104, 105],
+        'volume': [1000, 1100, 1200]
+    })
+    is_valid, msg = DataValidator.validate_ohlcv_dataframe(df)
+    print(f"OHLCV Validation: {is_valid} - {msg}")
+    
+    # Test signal validation
+    signal = {
+        'symbol': 'BTC/USDT',
+        'direction': 'BUY',
+        'entry_price': 50000.0,
+        'stop_loss': 49500.0,
+        'take_profit_1': 50750.0,
+        'take_profit_2': 51500.0
+    }
+    is_valid, msg = DataValidator.validate_trade_signal(signal)
+    print(f"Signal Validation: {is_valid} - {msg}")
+    
+    print("\nAll validator tests completed!")
+  # EURUSD, GBPUSD
+            metal_pattern = r'^X[A-Z]{2}USD
+    
+    @staticmethod
+    def validate_timeframe(timeframe: str) -> Tuple[bool, str]:
+        """
+        Validate timeframe format.
+        
+        Args:
+            timeframe: Timeframe string (e.g., '1h', '15m', '4h', '1d')
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        valid_timeframes = [
+            '1m', '3m', '5m', '15m', '30m',
+            '1h', '2h', '4h', '6h', '12h',
+            '1d', '3d', '1w', '1M'
+        ]
+        
+        if timeframe not in valid_timeframes:
+            return False, f"Invalid timeframe. Must be one of: {valid_timeframes}"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_trade_signal(signal: Dict) -> Tuple[bool, str]:
+        """
+        Validate trade signal structure and values.
+        
+        Args:
+            signal: Trading signal dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = [
+            'symbol', 'direction', 'entry_price',
+            'stop_loss', 'take_profit_1', 'take_profit_2'
+        ]
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in signal]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate symbol
+        is_valid, msg = DataValidator.validate_trading_symbol(signal['symbol'])
+        if not is_valid:
+            return False, f"Invalid symbol: {msg}"
+        
+        # Validate direction
+        if signal['direction'] not in ['BUY', 'SELL']:
+            return False, "Direction must be 'BUY' or 'SELL'"
+        
+        # Validate prices are positive
+        price_fields = ['entry_price', 'stop_loss', 'take_profit_1', 'take_profit_2']
+        for field in price_fields:
+            if signal[field] <= 0:
+                return False, f"{field} must be positive"
+        
+        # Validate price relationships for BUY signals
+        if signal['direction'] == 'BUY':
+            if signal['stop_loss'] >= signal['entry_price']:
+                return False, "For BUY: stop_loss must be below entry_price"
+            if signal['take_profit_1'] <= signal['entry_price']:
+                return False, "For BUY: take_profit_1 must be above entry_price"
+            if signal['take_profit_2'] <= signal['take_profit_1']:
+                return False, "For BUY: take_profit_2 must be above take_profit_1"
+        
+        # Validate price relationships for SELL signals
+        if signal['direction'] == 'SELL':
+            if signal['stop_loss'] <= signal['entry_price']:
+                return False, "For SELL: stop_loss must be above entry_price"
+            if signal['take_profit_1'] >= signal['entry_price']:
+                return False, "For SELL: take_profit_1 must be below entry_price"
+            if signal['take_profit_2'] >= signal['take_profit_1']:
+                return False, "For SELL: take_profit_2 must be below take_profit_1"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_risk_parameters(params: Dict) -> Tuple[bool, str]:
+        """
+        Validate risk management parameters.
+        
+        Args:
+            params: Risk parameters dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = [
+            'position_size_percent',
+            'max_daily_loss_percent',
+            'max_open_positions'
+        ]
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in params]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate position size
+        if not 0 < params['position_size_percent'] <= 100:
+            return False, "position_size_percent must be between 0 and 100"
+        
+        if params['position_size_percent'] > 10:
+            return False, "position_size_percent should not exceed 10% (high risk)"
+        
+        # Validate max daily loss
+        if not 0 < params['max_daily_loss_percent'] <= 100:
+            return False, "max_daily_loss_percent must be between 0 and 100"
+        
+        # Validate max open positions
+        if not isinstance(params['max_open_positions'], int) or params['max_open_positions'] < 1:
+            return False, "max_open_positions must be a positive integer"
+        
+        if params['max_open_positions'] > 10:
+            return False, "max_open_positions should not exceed 10 (high risk)"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_ml_prediction(prediction: Dict) -> Tuple[bool, str]:
+        """
+        Validate machine learning prediction output.
+        
+        Args:
+            prediction: ML prediction dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = ['model1', 'model2', 'model3', 'ensemble', 'confidence']
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in prediction]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate prediction values (-1, 0, or 1)
+        for model in ['model1', 'model2', 'model3', 'ensemble']:
+            if prediction[model] not in [-1, 0, 1]:
+                return False, f"{model} prediction must be -1 (sell), 0 (neutral), or 1 (buy)"
+        
+        # Validate confidence score
+        if not 0 <= prediction['confidence'] <= 1:
+            return False, "confidence must be between 0 and 1"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_sentiment_score(sentiment: Dict) -> Tuple[bool, str]:
+        """
+        Validate sentiment analysis output.
+        
+        Args:
+            sentiment: Sentiment analysis dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = ['score', 'label', 'confidence']
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in sentiment]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate score range
+        if not -1 <= sentiment['score'] <= 1:
+            return False, "sentiment score must be between -1 and 1"
+        
+        # Validate label
+        if sentiment['label'] not in ['bullish', 'bearish', 'neutral']:
+            return False, "label must be 'bullish', 'bearish', or 'neutral'"
+        
+        # Validate confidence
+        if not 0 <= sentiment['confidence'] <= 1:
+            return False, "confidence must be between 0 and 1"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_poi(poi: Dict) -> Tuple[bool, str]:
+        """
+        Validate Point of Interest (POI) structure.
+        
+        Args:
+            poi: POI dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = [
+            'type', 'price_high', 'price_low',
+            'triggered_structure', 'has_inducement',
+            'is_unmitigated', 'distance_to_liquidity'
+        ]
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in poi]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate POI type
+        if poi['type'] not in ['OB', 'BB', 'FVG']:
+            return False, "POI type must be 'OB' (Order Block), 'BB' (Breaker Block), or 'FVG' (Fair Value Gap)"
+        
+        # Validate prices
+        if poi['price_high'] <= poi['price_low']:
+            return False, "price_high must be greater than price_low"
+        
+        # Validate boolean fields
+        for field in ['triggered_structure', 'has_inducement', 'is_unmitigated']:
+            if not isinstance(poi[field], bool):
+                return False, f"{field} must be boolean"
+        
+        # Validate POI selection rules
+        if not poi['triggered_structure']:
+            return False, "POI must trigger a shift in market structure or break of structure"
+        
+        if not poi['has_inducement']:
+            return False, "POI must have inducement or liquidity protecting it"
+        
+        if not poi['is_unmitigated']:
+            return False, "POI must be unmitigated"
+        
+        return True, "Valid"
+
+
+class ConfigValidator:
+    """Validates bot configuration."""
+    
+    @staticmethod
+    def validate_api_key(api_key: str, key_name: str = "API Key") -> Tuple[bool, str]:
+        """
+        Validate API key format.
+        
+        Args:
+            api_key: API key string
+            key_name: Name of the key for error messages
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not api_key:
+            return False, f"{key_name} is empty"
+        
+        if len(api_key) < 10:
+            return False, f"{key_name} is too short"
+        
+        # Check for placeholder values
+        placeholder_keywords = [
+            'your_', 'example', 'test', 'demo', 'placeholder',
+            'xxx', '123', 'abc', 'key_here'
+        ]
+        
+        if any(keyword in api_key.lower() for keyword in placeholder_keywords):
+            return False, f"{key_name} appears to be a placeholder value"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_telegram_chat_id(chat_id: str) -> Tuple[bool, str]:
+        """
+        Validate Telegram chat ID format.
+        
+        Args:
+            chat_id: Telegram chat ID
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not chat_id:
+            return False, "Chat ID is empty"
+        
+        # Remove leading/trailing whitespace
+        chat_id = chat_id.strip()
+        
+        # Check if it's numeric or starts with -
+        if not (chat_id.lstrip('-').isdigit()):
+            return False, "Chat ID must be numeric"
+        
+        return True, "Valid"
+
+
+if __name__ == "__main__":
+    # Test validators
+    print("Testing Data Validators...")
+    
+    # Test OHLCV validation
+    df = pd.DataFrame({
+        'open': [100, 101, 102],
+        'high': [105, 106, 107],
+        'low': [99, 100, 101],
+        'close': [103, 104, 105],
+        'volume': [1000, 1100, 1200]
+    })
+    is_valid, msg = DataValidator.validate_ohlcv_dataframe(df)
+    print(f"OHLCV Validation: {is_valid} - {msg}")
+    
+    # Test signal validation
+    signal = {
+        'symbol': 'BTC/USDT',
+        'direction': 'BUY',
+        'entry_price': 50000.0,
+        'stop_loss': 49500.0,
+        'take_profit_1': 50750.0,
+        'take_profit_2': 51500.0
+    }
+    is_valid, msg = DataValidator.validate_trade_signal(signal)
+    print(f"Signal Validation: {is_valid} - {msg}")
+    
+    print("\nAll validator tests completed!")
+  # XAUUSD, XAGUSD
+            index_pattern = r'^[A-Z]{2,3}\d{2,3}
+    
+    @staticmethod
+    def validate_timeframe(timeframe: str) -> Tuple[bool, str]:
+        """
+        Validate timeframe format.
+        
+        Args:
+            timeframe: Timeframe string (e.g., '1h', '15m', '4h', '1d')
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        valid_timeframes = [
+            '1m', '3m', '5m', '15m', '30m',
+            '1h', '2h', '4h', '6h', '12h',
+            '1d', '3d', '1w', '1M'
+        ]
+        
+        if timeframe not in valid_timeframes:
+            return False, f"Invalid timeframe. Must be one of: {valid_timeframes}"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_trade_signal(signal: Dict) -> Tuple[bool, str]:
+        """
+        Validate trade signal structure and values.
+        
+        Args:
+            signal: Trading signal dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = [
+            'symbol', 'direction', 'entry_price',
+            'stop_loss', 'take_profit_1', 'take_profit_2'
+        ]
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in signal]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate symbol
+        is_valid, msg = DataValidator.validate_trading_symbol(signal['symbol'])
+        if not is_valid:
+            return False, f"Invalid symbol: {msg}"
+        
+        # Validate direction
+        if signal['direction'] not in ['BUY', 'SELL']:
+            return False, "Direction must be 'BUY' or 'SELL'"
+        
+        # Validate prices are positive
+        price_fields = ['entry_price', 'stop_loss', 'take_profit_1', 'take_profit_2']
+        for field in price_fields:
+            if signal[field] <= 0:
+                return False, f"{field} must be positive"
+        
+        # Validate price relationships for BUY signals
+        if signal['direction'] == 'BUY':
+            if signal['stop_loss'] >= signal['entry_price']:
+                return False, "For BUY: stop_loss must be below entry_price"
+            if signal['take_profit_1'] <= signal['entry_price']:
+                return False, "For BUY: take_profit_1 must be above entry_price"
+            if signal['take_profit_2'] <= signal['take_profit_1']:
+                return False, "For BUY: take_profit_2 must be above take_profit_1"
+        
+        # Validate price relationships for SELL signals
+        if signal['direction'] == 'SELL':
+            if signal['stop_loss'] <= signal['entry_price']:
+                return False, "For SELL: stop_loss must be above entry_price"
+            if signal['take_profit_1'] >= signal['entry_price']:
+                return False, "For SELL: take_profit_1 must be below entry_price"
+            if signal['take_profit_2'] >= signal['take_profit_1']:
+                return False, "For SELL: take_profit_2 must be below take_profit_1"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_risk_parameters(params: Dict) -> Tuple[bool, str]:
+        """
+        Validate risk management parameters.
+        
+        Args:
+            params: Risk parameters dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = [
+            'position_size_percent',
+            'max_daily_loss_percent',
+            'max_open_positions'
+        ]
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in params]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate position size
+        if not 0 < params['position_size_percent'] <= 100:
+            return False, "position_size_percent must be between 0 and 100"
+        
+        if params['position_size_percent'] > 10:
+            return False, "position_size_percent should not exceed 10% (high risk)"
+        
+        # Validate max daily loss
+        if not 0 < params['max_daily_loss_percent'] <= 100:
+            return False, "max_daily_loss_percent must be between 0 and 100"
+        
+        # Validate max open positions
+        if not isinstance(params['max_open_positions'], int) or params['max_open_positions'] < 1:
+            return False, "max_open_positions must be a positive integer"
+        
+        if params['max_open_positions'] > 10:
+            return False, "max_open_positions should not exceed 10 (high risk)"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_ml_prediction(prediction: Dict) -> Tuple[bool, str]:
+        """
+        Validate machine learning prediction output.
+        
+        Args:
+            prediction: ML prediction dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = ['model1', 'model2', 'model3', 'ensemble', 'confidence']
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in prediction]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate prediction values (-1, 0, or 1)
+        for model in ['model1', 'model2', 'model3', 'ensemble']:
+            if prediction[model] not in [-1, 0, 1]:
+                return False, f"{model} prediction must be -1 (sell), 0 (neutral), or 1 (buy)"
+        
+        # Validate confidence score
+        if not 0 <= prediction['confidence'] <= 1:
+            return False, "confidence must be between 0 and 1"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_sentiment_score(sentiment: Dict) -> Tuple[bool, str]:
+        """
+        Validate sentiment analysis output.
+        
+        Args:
+            sentiment: Sentiment analysis dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = ['score', 'label', 'confidence']
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in sentiment]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate score range
+        if not -1 <= sentiment['score'] <= 1:
+            return False, "sentiment score must be between -1 and 1"
+        
+        # Validate label
+        if sentiment['label'] not in ['bullish', 'bearish', 'neutral']:
+            return False, "label must be 'bullish', 'bearish', or 'neutral'"
+        
+        # Validate confidence
+        if not 0 <= sentiment['confidence'] <= 1:
+            return False, "confidence must be between 0 and 1"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_poi(poi: Dict) -> Tuple[bool, str]:
+        """
+        Validate Point of Interest (POI) structure.
+        
+        Args:
+            poi: POI dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = [
+            'type', 'price_high', 'price_low',
+            'triggered_structure', 'has_inducement',
+            'is_unmitigated', 'distance_to_liquidity'
+        ]
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in poi]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate POI type
+        if poi['type'] not in ['OB', 'BB', 'FVG']:
+            return False, "POI type must be 'OB' (Order Block), 'BB' (Breaker Block), or 'FVG' (Fair Value Gap)"
+        
+        # Validate prices
+        if poi['price_high'] <= poi['price_low']:
+            return False, "price_high must be greater than price_low"
+        
+        # Validate boolean fields
+        for field in ['triggered_structure', 'has_inducement', 'is_unmitigated']:
+            if not isinstance(poi[field], bool):
+                return False, f"{field} must be boolean"
+        
+        # Validate POI selection rules
+        if not poi['triggered_structure']:
+            return False, "POI must trigger a shift in market structure or break of structure"
+        
+        if not poi['has_inducement']:
+            return False, "POI must have inducement or liquidity protecting it"
+        
+        if not poi['is_unmitigated']:
+            return False, "POI must be unmitigated"
+        
+        return True, "Valid"
+
+
+class ConfigValidator:
+    """Validates bot configuration."""
+    
+    @staticmethod
+    def validate_api_key(api_key: str, key_name: str = "API Key") -> Tuple[bool, str]:
+        """
+        Validate API key format.
+        
+        Args:
+            api_key: API key string
+            key_name: Name of the key for error messages
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not api_key:
+            return False, f"{key_name} is empty"
+        
+        if len(api_key) < 10:
+            return False, f"{key_name} is too short"
+        
+        # Check for placeholder values
+        placeholder_keywords = [
+            'your_', 'example', 'test', 'demo', 'placeholder',
+            'xxx', '123', 'abc', 'key_here'
+        ]
+        
+        if any(keyword in api_key.lower() for keyword in placeholder_keywords):
+            return False, f"{key_name} appears to be a placeholder value"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_telegram_chat_id(chat_id: str) -> Tuple[bool, str]:
+        """
+        Validate Telegram chat ID format.
+        
+        Args:
+            chat_id: Telegram chat ID
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not chat_id:
+            return False, "Chat ID is empty"
+        
+        # Remove leading/trailing whitespace
+        chat_id = chat_id.strip()
+        
+        # Check if it's numeric or starts with -
+        if not (chat_id.lstrip('-').isdigit()):
+            return False, "Chat ID must be numeric"
+        
+        return True, "Valid"
+
+
+if __name__ == "__main__":
+    # Test validators
+    print("Testing Data Validators...")
+    
+    # Test OHLCV validation
+    df = pd.DataFrame({
+        'open': [100, 101, 102],
+        'high': [105, 106, 107],
+        'low': [99, 100, 101],
+        'close': [103, 104, 105],
+        'volume': [1000, 1100, 1200]
+    })
+    is_valid, msg = DataValidator.validate_ohlcv_dataframe(df)
+    print(f"OHLCV Validation: {is_valid} - {msg}")
+    
+    # Test signal validation
+    signal = {
+        'symbol': 'BTC/USDT',
+        'direction': 'BUY',
+        'entry_price': 50000.0,
+        'stop_loss': 49500.0,
+        'take_profit_1': 50750.0,
+        'take_profit_2': 51500.0
+    }
+    is_valid, msg = DataValidator.validate_trade_signal(signal)
+    print(f"Signal Validation: {is_valid} - {msg}")
+    
+    print("\nAll validator tests completed!")
+  # US30, NAS100, SPX500
+            crypto_pattern = r'^[A-Z]{3,4}USD
+    
+    @staticmethod
+    def validate_timeframe(timeframe: str) -> Tuple[bool, str]:
+        """
+        Validate timeframe format.
+        
+        Args:
+            timeframe: Timeframe string (e.g., '1h', '15m', '4h', '1d')
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        valid_timeframes = [
+            '1m', '3m', '5m', '15m', '30m',
+            '1h', '2h', '4h', '6h', '12h',
+            '1d', '3d', '1w', '1M'
+        ]
+        
+        if timeframe not in valid_timeframes:
+            return False, f"Invalid timeframe. Must be one of: {valid_timeframes}"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_trade_signal(signal: Dict) -> Tuple[bool, str]:
+        """
+        Validate trade signal structure and values.
+        
+        Args:
+            signal: Trading signal dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = [
+            'symbol', 'direction', 'entry_price',
+            'stop_loss', 'take_profit_1', 'take_profit_2'
+        ]
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in signal]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate symbol
+        is_valid, msg = DataValidator.validate_trading_symbol(signal['symbol'])
+        if not is_valid:
+            return False, f"Invalid symbol: {msg}"
+        
+        # Validate direction
+        if signal['direction'] not in ['BUY', 'SELL']:
+            return False, "Direction must be 'BUY' or 'SELL'"
+        
+        # Validate prices are positive
+        price_fields = ['entry_price', 'stop_loss', 'take_profit_1', 'take_profit_2']
+        for field in price_fields:
+            if signal[field] <= 0:
+                return False, f"{field} must be positive"
+        
+        # Validate price relationships for BUY signals
+        if signal['direction'] == 'BUY':
+            if signal['stop_loss'] >= signal['entry_price']:
+                return False, "For BUY: stop_loss must be below entry_price"
+            if signal['take_profit_1'] <= signal['entry_price']:
+                return False, "For BUY: take_profit_1 must be above entry_price"
+            if signal['take_profit_2'] <= signal['take_profit_1']:
+                return False, "For BUY: take_profit_2 must be above take_profit_1"
+        
+        # Validate price relationships for SELL signals
+        if signal['direction'] == 'SELL':
+            if signal['stop_loss'] <= signal['entry_price']:
+                return False, "For SELL: stop_loss must be above entry_price"
+            if signal['take_profit_1'] >= signal['entry_price']:
+                return False, "For SELL: take_profit_1 must be below entry_price"
+            if signal['take_profit_2'] >= signal['take_profit_1']:
+                return False, "For SELL: take_profit_2 must be below take_profit_1"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_risk_parameters(params: Dict) -> Tuple[bool, str]:
+        """
+        Validate risk management parameters.
+        
+        Args:
+            params: Risk parameters dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = [
+            'position_size_percent',
+            'max_daily_loss_percent',
+            'max_open_positions'
+        ]
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in params]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate position size
+        if not 0 < params['position_size_percent'] <= 100:
+            return False, "position_size_percent must be between 0 and 100"
+        
+        if params['position_size_percent'] > 10:
+            return False, "position_size_percent should not exceed 10% (high risk)"
+        
+        # Validate max daily loss
+        if not 0 < params['max_daily_loss_percent'] <= 100:
+            return False, "max_daily_loss_percent must be between 0 and 100"
+        
+        # Validate max open positions
+        if not isinstance(params['max_open_positions'], int) or params['max_open_positions'] < 1:
+            return False, "max_open_positions must be a positive integer"
+        
+        if params['max_open_positions'] > 10:
+            return False, "max_open_positions should not exceed 10 (high risk)"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_ml_prediction(prediction: Dict) -> Tuple[bool, str]:
+        """
+        Validate machine learning prediction output.
+        
+        Args:
+            prediction: ML prediction dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = ['model1', 'model2', 'model3', 'ensemble', 'confidence']
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in prediction]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate prediction values (-1, 0, or 1)
+        for model in ['model1', 'model2', 'model3', 'ensemble']:
+            if prediction[model] not in [-1, 0, 1]:
+                return False, f"{model} prediction must be -1 (sell), 0 (neutral), or 1 (buy)"
+        
+        # Validate confidence score
+        if not 0 <= prediction['confidence'] <= 1:
+            return False, "confidence must be between 0 and 1"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_sentiment_score(sentiment: Dict) -> Tuple[bool, str]:
+        """
+        Validate sentiment analysis output.
+        
+        Args:
+            sentiment: Sentiment analysis dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = ['score', 'label', 'confidence']
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in sentiment]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate score range
+        if not -1 <= sentiment['score'] <= 1:
+            return False, "sentiment score must be between -1 and 1"
+        
+        # Validate label
+        if sentiment['label'] not in ['bullish', 'bearish', 'neutral']:
+            return False, "label must be 'bullish', 'bearish', or 'neutral'"
+        
+        # Validate confidence
+        if not 0 <= sentiment['confidence'] <= 1:
+            return False, "confidence must be between 0 and 1"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_poi(poi: Dict) -> Tuple[bool, str]:
+        """
+        Validate Point of Interest (POI) structure.
+        
+        Args:
+            poi: POI dictionary
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        required_fields = [
+            'type', 'price_high', 'price_low',
+            'triggered_structure', 'has_inducement',
+            'is_unmitigated', 'distance_to_liquidity'
+        ]
+        
+        # Check required fields
+        missing_fields = [field for field in required_fields if field not in poi]
+        if missing_fields:
+            return False, f"Missing required fields: {missing_fields}"
+        
+        # Validate POI type
+        if poi['type'] not in ['OB', 'BB', 'FVG']:
+            return False, "POI type must be 'OB' (Order Block), 'BB' (Breaker Block), or 'FVG' (Fair Value Gap)"
+        
+        # Validate prices
+        if poi['price_high'] <= poi['price_low']:
+            return False, "price_high must be greater than price_low"
+        
+        # Validate boolean fields
+        for field in ['triggered_structure', 'has_inducement', 'is_unmitigated']:
+            if not isinstance(poi[field], bool):
+                return False, f"{field} must be boolean"
+        
+        # Validate POI selection rules
+        if not poi['triggered_structure']:
+            return False, "POI must trigger a shift in market structure or break of structure"
+        
+        if not poi['has_inducement']:
+            return False, "POI must have inducement or liquidity protecting it"
+        
+        if not poi['is_unmitigated']:
+            return False, "POI must be unmitigated"
+        
+        return True, "Valid"
+
+
+class ConfigValidator:
+    """Validates bot configuration."""
+    
+    @staticmethod
+    def validate_api_key(api_key: str, key_name: str = "API Key") -> Tuple[bool, str]:
+        """
+        Validate API key format.
+        
+        Args:
+            api_key: API key string
+            key_name: Name of the key for error messages
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not api_key:
+            return False, f"{key_name} is empty"
+        
+        if len(api_key) < 10:
+            return False, f"{key_name} is too short"
+        
+        # Check for placeholder values
+        placeholder_keywords = [
+            'your_', 'example', 'test', 'demo', 'placeholder',
+            'xxx', '123', 'abc', 'key_here'
+        ]
+        
+        if any(keyword in api_key.lower() for keyword in placeholder_keywords):
+            return False, f"{key_name} appears to be a placeholder value"
+        
+        return True, "Valid"
+    
+    @staticmethod
+    def validate_telegram_chat_id(chat_id: str) -> Tuple[bool, str]:
+        """
+        Validate Telegram chat ID format.
+        
+        Args:
+            chat_id: Telegram chat ID
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not chat_id:
+            return False, "Chat ID is empty"
+        
+        # Remove leading/trailing whitespace
+        chat_id = chat_id.strip()
+        
+        # Check if it's numeric or starts with -
+        if not (chat_id.lstrip('-').isdigit()):
+            return False, "Chat ID must be numeric"
+        
+        return True, "Valid"
+
+
+if __name__ == "__main__":
+    # Test validators
+    print("Testing Data Validators...")
+    
+    # Test OHLCV validation
+    df = pd.DataFrame({
+        'open': [100, 101, 102],
+        'high': [105, 106, 107],
+        'low': [99, 100, 101],
+        'close': [103, 104, 105],
+        'volume': [1000, 1100, 1200]
+    })
+    is_valid, msg = DataValidator.validate_ohlcv_dataframe(df)
+    print(f"OHLCV Validation: {is_valid} - {msg}")
+    
+    # Test signal validation
+    signal = {
+        'symbol': 'BTC/USDT',
+        'direction': 'BUY',
+        'entry_price': 50000.0,
+        'stop_loss': 49500.0,
+        'take_profit_1': 50750.0,
+        'take_profit_2': 51500.0
+    }
+    is_valid, msg = DataValidator.validate_trade_signal(signal)
+    print(f"Signal Validation: {is_valid} - {msg}")
+    
+    print("\nAll validator tests completed!")
+  # BTCUSD, ETHUSD
+            suffix_pattern = r'^[A-Z]{6}[a-z._-]+'  # EURUSDpro, EURUSD.raw
+            
+            patterns = [forex_pattern, metal_pattern, index_pattern, crypto_pattern, suffix_pattern]
+            
+            # Check if matches any common pattern
+            if not any(re.match(pattern, symbol) for pattern in patterns):
+                # Still valid if it has valid characters, just warn
+                return True, f"Valid but uncommon MT5 format: {symbol}"
+            
+            return True, "Valid"
+        
+        elif platform.lower() == "crypto":
+            # Crypto exchange format: BASE/QUOTE
+            if '/' not in symbol:
+                return False, "Crypto symbols must be in BASE/QUOTE format (e.g., BTC/USDT)"
+            
+            parts = symbol.split('/')
+            if len(parts) != 2:
+                return False, "Symbol must have exactly one '/' separator"
+            
+            base, quote = parts
+            
+            # Check base and quote are not empty
+            if not base or not quote:
+                return False, "Base or quote currency is empty"
+            
+            # Check for valid characters (alphanumeric only)
+            if not base.isalnum() or not quote.isalnum():
+                return False, "Symbol contains invalid characters"
+            
+            return True, "Valid"
+        
+        else:
+            return False, f"Unknown platform: {platform}"
     
     @staticmethod
     def validate_timeframe(timeframe: str) -> Tuple[bool, str]:

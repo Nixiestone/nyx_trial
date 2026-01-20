@@ -460,7 +460,199 @@ class MT5Executor:
         
         return False
     
-    def _get_filling_mode(self) -> int:
+    def place_pending_order(
+        self,
+        symbol: str,
+        order_type: str,
+        lot_size: float,
+        entry_price: float,
+        stop_loss: float,
+        take_profit: float,
+        comment: str = "NYX Bot Pending"
+    ) -> Optional[Dict]:
+        """
+        Place a pending order (Buy Stop, Sell Stop, Buy Limit, Sell Limit).
+        
+        Args:
+            symbol: Trading symbol
+            order_type: 'BUY_STOP', 'SELL_STOP', 'BUY_LIMIT', 'SELL_LIMIT'
+            lot_size: Position size in lots
+            entry_price: Price to enter trade
+            stop_loss: Stop loss price
+            take_profit: Take profit price
+            comment: Order comment
+            
+        Returns:
+            Dictionary with order result or None
+        """
+        if not self.connector.connected:
+            self.logger.error("Not connected to MT5")
+            return None
+        
+        if not self.config.AUTO_TRADING_ENABLED:
+            self.logger.warning("Auto trading is disabled. Pending order not placed.")
+            self.logger.info(
+                f"PENDING SIGNAL: {order_type} {symbol} @ {entry_price}, "
+                f"Size: {lot_size} lots, SL: {stop_loss}, TP: {take_profit}"
+            )
+            return None
+        
+        try:
+            # Get symbol info
+            symbol_info = self.connector.get_symbol_info(symbol)
+            if symbol_info is None:
+                self.logger.error(f"Failed to get symbol info for {symbol}")
+                return None
+            
+            # Determine MT5 order type
+            order_type_map = {
+                'BUY_STOP': mt5.ORDER_TYPE_BUY_STOP,
+                'SELL_STOP': mt5.ORDER_TYPE_SELL_STOP,
+                'BUY_LIMIT': mt5.ORDER_TYPE_BUY_LIMIT,
+                'SELL_LIMIT': mt5.ORDER_TYPE_SELL_LIMIT
+            }
+            
+            mt5_order_type = order_type_map.get(order_type)
+            if mt5_order_type is None:
+                self.logger.error(f"Invalid pending order type: {order_type}")
+                return None
+            
+            # Normalize prices to symbol digits
+            digits = symbol_info['digits']
+            entry_price = round(entry_price, digits)
+            stop_loss = round(stop_loss, digits)
+            take_profit = round(take_profit, digits)
+            
+            # Prepare order request
+            request = {
+                "action": mt5.TRADE_ACTION_PENDING,
+                "symbol": symbol,
+                "volume": float(lot_size),
+                "type": mt5_order_type,
+                "price": entry_price,
+                "sl": stop_loss,
+                "tp": take_profit,
+                "deviation": self.config.MT5_DEVIATION,
+                "magic": self.magic_number,
+                "comment": comment,
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": self._get_filling_mode()
+            }
+            
+            # Send order
+            result = mt5.order_send(request)
+            
+            if result is None:
+                self.logger.error(f"Pending order failed: {mt5.last_error()}")
+                return None
+            
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                self.logger.error(f"Pending order failed with retcode: {result.retcode}")
+                self.logger.error(f"Error: {self._get_error_description(result.retcode)}")
+                return None
+            
+            # Order successful
+            order_result = {
+                'order': result.order,
+                'symbol': symbol,
+                'type': order_type,
+                'volume': lot_size,
+                'entry_price': entry_price,
+                'sl': stop_loss,
+                'tp': take_profit,
+                'time': datetime.now(),
+                'comment': comment
+            }
+            
+            self.logger.info(
+                f"Pending order placed: {order_type} {symbol} @ {entry_price}, "
+                f"Order: {result.order}"
+            )
+            
+            return order_result
+            
+        except Exception as e:
+            self.logger.exception(f"Error placing pending order: {e}")
+            return None
+        self,
+        ticket: int,
+        entry_price: float
+    ) -> bool:
+        """
+        Manage position when TP1 is hit:
+        1. Close 50% of position
+        2. Move SL to breakeven (entry price)
+        
+        Args:
+            ticket: Position ticket number
+            entry_price: Original entry price
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.connector.connected:
+            self.logger.error("Not connected to MT5")
+            return False
+        
+        if not self.config.AUTO_TRADING_ENABLED:
+            self.logger.info("Auto trading disabled - TP1 management skipped")
+            return False
+        
+        try:
+            self.logger.info(f"Managing TP1 hit for ticket {ticket}")
+            
+            # Step 1: Close 50% of position
+            close_percent = self.config.PARTIAL_CLOSE_TP1_PERCENT
+            
+            if self.close_position(ticket, partial_close=True, close_percent=close_percent):
+                self.logger.info(f"Closed {close_percent}% at TP1")
+            else:
+                self.logger.error("Failed to partial close at TP1")
+                return False
+            
+            # Step 2: Move SL to breakeven if enabled
+            if self.config.MOVE_SL_TO_BREAKEVEN_AT_TP1:
+                # Small buffer above/below entry to account for spread
+                buffer_pips = 2  # 2 pip buffer
+                
+                # Get position info
+                position = mt5.positions_get(ticket=ticket)
+                
+                if position is None or len(position) == 0:
+                    self.logger.warning(f"Position {ticket} not found (may be fully closed)")
+                    return True  # Not an error if position is closed
+                
+                position = position[0]
+                
+                # Get symbol info for pip calculation
+                symbol_info = self.connector.get_symbol_info(position.symbol)
+                if not symbol_info:
+                    return False
+                
+                # Calculate buffer based on pip value
+                if 'JPY' in position.symbol:
+                    buffer = buffer_pips * 0.01
+                else:
+                    buffer = buffer_pips * 0.0001
+                
+                # Set new SL at breakeven with buffer
+                if position.type == mt5.ORDER_TYPE_BUY:
+                    new_sl = entry_price + buffer
+                else:
+                    new_sl = entry_price - buffer
+                
+                # Modify position SL
+                if self.modify_position(ticket, new_sl=new_sl):
+                    self.logger.info(f"Moved SL to breakeven: {new_sl:.5f}")
+                else:
+                    self.logger.error("Failed to move SL to breakeven")
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            self.logger.exception(f"Error managing TP1: {e}")
+            return False
         """
         Get order filling mode based on configuration.
         

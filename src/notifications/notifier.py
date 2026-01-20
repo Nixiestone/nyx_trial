@@ -40,28 +40,83 @@ class Notifier:
         self.discord_webhook = config.DISCORD_WEBHOOK_URL if config.ENABLE_DISCORD else None
     
     def send_signal_notification(self, signal: Dict):
-        """Send trading signal notification."""
+        """Send trading signal notification with order type."""
         
         direction_emoji = "🟢" if signal['direction'] == "BUY" else "🔴"
+        
+        # Calculate pips for SL and TPs
+        entry = signal['entry_price']
+        current = signal.get('current_price', entry)
+        sl = signal['stop_loss']
+        tp1 = signal['take_profit_1']
+        tp2 = signal['take_profit_2']
+        
+        # Get pip multiplier (10000 for most pairs, 100 for JPY pairs)
+        symbol = signal['symbol']
+        if 'JPY' in symbol:
+            pip_multiplier = 100
+        elif any(x in symbol for x in ['XAU', 'XAG', 'GOLD', 'SILVER']):
+            pip_multiplier = 100
+        elif any(x in symbol for x in ['BTC', 'ETH', 'CRYPTO']):
+            pip_multiplier = 1
+        elif any(x in symbol for x in ['US30', 'NAS100', 'SPX500']):
+            pip_multiplier = 1
+        else:
+            pip_multiplier = 10000
+        
+        sl_pips = abs(entry - sl) * pip_multiplier
+        tp1_pips = abs(tp1 - entry) * pip_multiplier
+        tp2_pips = abs(tp2 - entry) * pip_multiplier
+        
+        # Get R:R ratios
+        rr_tp1 = signal.get('risk_reward_tp1', 0)
+        rr_tp2 = signal.get('risk_reward_tp2', 0)
+        
+        # Get order type information
+        order_type = signal.get('order_type', 'Market Order')
+        immediate = signal.get('immediate_execution', True)
+        order_reason = signal.get('order_reason', 'Price at entry level')
+        
+        # Order type emoji
+        if immediate:
+            order_emoji = "🔴"  # Immediate execution
+            order_status = "EXECUTE NOW"
+        else:
+            order_emoji = "🟡"  # Pending order
+            order_status = "PENDING ORDER"
         
         message = f"""
 {direction_emoji} TRADING SIGNAL {direction_emoji}
 
-Symbol: {signal['symbol']}
+Symbol: {symbol}
 Direction: {signal['direction']}
 Scenario: {signal.get('scenario', 'N/A')}
+POI Type: {signal.get('poi_type', 'N/A')}
 
-Entry: {signal['entry_price']:.5f}
-Stop Loss: {signal['stop_loss']:.5f}
-Take Profit 1: {signal['take_profit_1']:.5f}
-Take Profit 2: {signal['take_profit_2']:.5f}
+{order_emoji} ORDER TYPE: {order_type}
+Status: {order_status}
+Reason: {order_reason}
 
-Risk/Reward TP1: {signal.get('risk_reward_tp1', 0):.2f}
-Risk/Reward TP2: {signal.get('risk_reward_tp2', 0):.2f}
+CURRENT PRICE: {current:.5f}
+ENTRY PRICE: {entry:.5f}
+
+STOP LOSS: {sl:.5f}
+SL Pips: {sl_pips:.1f} pips
+
+TAKE PROFIT 1: {tp1:.5f}
+TP1 Pips: {tp1_pips:.1f} pips
+R:R TP1: 1:{rr_tp1:.2f}
+
+TAKE PROFIT 2: {tp2:.5f}
+TP2 Pips: {tp2_pips:.1f} pips
+R:R TP2: 1:{rr_tp2:.2f}
 
 Confidence: {signal['confidence']*100:.1f}%
-ML Prediction: {signal['ml_prediction']['ensemble']}
-Sentiment: {signal['sentiment']['label'].upper()}
+ML Prediction: {signal['ml_prediction']['ensemble']} (Conf: {signal['ml_prediction']['confidence']*100:.1f}%)
+Sentiment: {signal['sentiment']['label'].upper()} ({signal['sentiment']['score']:.2f})
+
+Inducement Swept: {'Yes' if signal.get('inducement_swept', False) else 'No'}
+FVG Validation: {'Yes' if signal.get('fvg_validation', False) else 'No'}
 
 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """

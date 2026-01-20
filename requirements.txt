@@ -132,4 +132,4 @@ plotly==5.18.0
 typing-extensions==4.9.0
 
 # Windows-specific (for MT5 integration)
-pywin32==306
+pywin32
