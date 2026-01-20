@@ -330,11 +330,12 @@ class SMCAnalyzer:
         symbol: str = "EURUSD"
     ) -> Dict:
         """
-        Phase 4: Calculate risk management levels with proper TP placement.
+        Calculate risk management levels with UNLIMITED R:R potential.
         
-        TP1: External liquidity (high/low formed before the pullback/inducement)
-        TP2: Next significant high/low on higher timeframe
-        Minimum R:R for TP1 is 1:2 (NO MAXIMUM - can be 1:20, 1:50, etc.)
+        CRITICAL: NO MAXIMUM R:R RATIO
+        - Minimum TP1 R:R: 1:2
+        - Maximum TP1 R:R: UNLIMITED (can be 1:5, 1:10, 1:50, whatever market offers)
+        - TP2 must always be beyond TP1
         
         Args:
             poi: Selected Point of Interest
@@ -342,30 +343,26 @@ class SMCAnalyzer:
             current_price: Current market price
             htf_context: HTF context for liquidity levels
             itf_structure: ITF structure analysis for external liquidity
-            symbol: Trading symbol for pip calculation
+            symbol: Trading symbol for accurate pip calculations
             
         Returns:
-            Dictionary with entry, SL, and TP levels with accurate pips
+            Dictionary with entry, SL, and TP levels
         """
+        # Import symbol normalizer and POIType
+        from ..utils.symbol_normalizer import SymbolNormalizer
+        from .poi_detector import POIType
+        
+        # Normalize symbol and get pip value
+        norm_symbol = SymbolNormalizer.normalize(symbol).normalized
+        pip_value = SymbolNormalizer.get_pip_value(norm_symbol)
+        
         # Calculate entry price
         if poi.poi_type == POIType.BREAKER_BLOCK:
             entry_price = poi.get_entry_price("breaker")
         else:
             entry_price = poi.get_entry_price("standard")
         
-        # Determine pip value based on symbol type
-        if 'JPY' in symbol:
-            pip_value = 0.01  # JPY pairs
-        elif any(x in symbol for x in ['XAU', 'XAG', 'GOLD', 'SILVER']):
-            pip_value = 0.01  # Gold/Silver
-        elif any(x in symbol for x in ['BTC', 'ETH', 'CRYPTO']):
-            pip_value = 1.0  # Crypto
-        elif any(x in symbol for x in ['US30', 'NAS100', 'SPX500', 'US500', 'DOW', 'NASDAQ']):
-            pip_value = 1.0  # Indices
-        else:
-            pip_value = 0.0001  # Standard forex pairs
-        
-        # Calculate Stop Loss (distal line + padding in actual pip value)
+        # Calculate Stop Loss (distal line + padding)
         if direction == "BUY":
             distal_line = poi.price_low
             stop_loss = distal_line - (self.sl_padding_pips * pip_value)
@@ -373,43 +370,47 @@ class SMCAnalyzer:
             distal_line = poi.price_high
             stop_loss = distal_line + (self.sl_padding_pips * pip_value)
         
-        # Calculate risk amount (actual price difference)
+        # Calculate risk amount (price difference)
         risk_amount = abs(entry_price - stop_loss)
         
+        # MINIMUM R:R for TP1 is 1:2 (NO MAXIMUM)
+        minimum_rr_tp1 = 2.0
+        
         # Calculate Take Profits based on liquidity zones
-        # NO MAXIMUM R:R - can be 1:2, 1:10, 1:50, whatever the market offers
         if direction == "BUY":
-            # TP1: External Liquidity (high formed before the pullback)
+            # TP1: External Liquidity (high formed before pullback)
             tp1_target = None
             
-            # Look for the swing high that was broken before the pullback
+            # Look for swing high from ITF structure
             swing_highs = itf_structure.get('swing_highs', [])
             if len(swing_highs) >= 1:
-                # External liquidity is the most recent swing high
+                # External liquidity is most recent swing high
                 tp1_target = swing_highs[-1].price
             
-            # If no swing high found or it's below entry, use minimum R:R
-            if tp1_target is None or tp1_target <= entry_price:
-                take_profit_1 = entry_price + (risk_amount * 2.0)  # Minimum 1:2
-            else:
+            # Calculate TP1 with market-offered R:R (can be ANY value >= 2.0)
+            if tp1_target is not None and tp1_target > entry_price:
+                # Use market's liquidity level
                 take_profit_1 = tp1_target
+            else:
+                # Fallback: minimum 1:2 R:R
+                take_profit_1 = entry_price + (risk_amount * minimum_rr_tp1)
             
-            # Ensure MINIMUM 1:2 R:R for TP1 (but allow higher)
-            min_tp1 = entry_price + (risk_amount * 2.0)
-            if take_profit_1 < min_tp1:
-                take_profit_1 = min_tp1
+            # ENFORCE MINIMUM 1:2 (but allow any value above this)
+            min_tp1_price = entry_price + (risk_amount * minimum_rr_tp1)
+            if take_profit_1 < min_tp1_price:
+                take_profit_1 = min_tp1_price
             
-            # TP2: Next significant high on HTF (NO LIMIT on R:R)
+            # TP2: Next HTF liquidity (NO LIMIT on R:R)
             tp2_target = None
             htf_swing_highs = htf_context.get('swing_highs', [])
             
-            # Find the next HTF swing high above TP1
+            # Find HTF swing high above TP1
             for swing_high in reversed(htf_swing_highs):
                 if swing_high.price > take_profit_1:
                     tp2_target = swing_high.price
                     break
             
-            # If found a valid HTF target, use it (regardless of R:R)
+            # If valid HTF target found, use it (REGARDLESS of R:R)
             if tp2_target is not None and tp2_target > take_profit_1:
                 take_profit_2 = tp2_target
             else:
@@ -421,37 +422,39 @@ class SMCAnalyzer:
                 take_profit_2 = entry_price + (risk_amount * 3.0)
         
         else:  # SELL
-            # TP1: External Liquidity (low formed before the pullback)
+            # TP1: External Liquidity (low formed before pullback)
             tp1_target = None
             
-            # Look for the swing low that was broken before the pullback
+            # Look for swing low from ITF structure
             swing_lows = itf_structure.get('swing_lows', [])
             if len(swing_lows) >= 1:
-                # External liquidity is the most recent swing low
+                # External liquidity is most recent swing low
                 tp1_target = swing_lows[-1].price
             
-            # If no swing low found or it's above entry, use minimum R:R
-            if tp1_target is None or tp1_target >= entry_price:
-                take_profit_1 = entry_price - (risk_amount * 2.0)  # Minimum 1:2
-            else:
+            # Calculate TP1 with market-offered R:R (can be ANY value >= 2.0)
+            if tp1_target is not None and tp1_target < entry_price:
+                # Use market's liquidity level
                 take_profit_1 = tp1_target
+            else:
+                # Fallback: minimum 1:2 R:R
+                take_profit_1 = entry_price - (risk_amount * minimum_rr_tp1)
             
-            # Ensure MINIMUM 1:2 R:R for TP1 (but allow higher)
-            max_tp1 = entry_price - (risk_amount * 2.0)
-            if take_profit_1 > max_tp1:
-                take_profit_1 = max_tp1
+            # ENFORCE MINIMUM 1:2 (but allow any value above this)
+            max_tp1_price = entry_price - (risk_amount * minimum_rr_tp1)
+            if take_profit_1 > max_tp1_price:
+                take_profit_1 = max_tp1_price
             
-            # TP2: Next significant low on HTF (NO LIMIT on R:R)
+            # TP2: Next HTF liquidity (NO LIMIT on R:R)
             tp2_target = None
             htf_swing_lows = htf_context.get('swing_lows', [])
             
-            # Find the next HTF swing low below TP1
+            # Find HTF swing low below TP1
             for swing_low in reversed(htf_swing_lows):
                 if swing_low.price < take_profit_1:
                     tp2_target = swing_low.price
                     break
             
-            # If found a valid HTF target, use it (regardless of R:R)
+            # If valid HTF target found, use it (REGARDLESS of R:R)
             if tp2_target is not None and tp2_target < take_profit_1:
                 take_profit_2 = tp2_target
             else:
@@ -462,7 +465,7 @@ class SMCAnalyzer:
             if take_profit_2 >= take_profit_1:
                 take_profit_2 = entry_price - (risk_amount * 3.0)
         
-        # Calculate ACTUAL risk-reward ratios (can be any value >= 2.0)
+        # Calculate ACTUAL R:R ratios (can be any value >= 2.0)
         rr_tp1 = abs(take_profit_1 - entry_price) / risk_amount if risk_amount > 0 else 0
         rr_tp2 = abs(take_profit_2 - entry_price) / risk_amount if risk_amount > 0 else 0
         
@@ -472,9 +475,9 @@ class SMCAnalyzer:
             'take_profit_1': take_profit_1,
             'take_profit_2': take_profit_2,
             'risk_amount': risk_amount,
-            'risk_reward_tp1': rr_tp1,
-            'risk_reward_tp2': rr_tp2,
-            'pip_value': pip_value  # Include for accurate pip calculations
+            'risk_reward_tp1': rr_tp1,  # Can be 2.0, 5.0, 10.0, 50.0, anything >= 2.0
+            'risk_reward_tp2': rr_tp2,  # Can be any value > rr_tp1
+            'pip_value': pip_value
         }
     
     def generate_trading_setup(
