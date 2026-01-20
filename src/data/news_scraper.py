@@ -83,7 +83,7 @@ class NewsScraper:
             'EURUSD': 'EUR USD euro dollar forex',
             'GBPUSD': 'GBP USD pound sterling forex',
             'USDJPY': 'USD JPY yen forex',
-            'GBPJPY': 'GBP JPY pound yen forex',
+            'GBPJPY': 'GBP JPY pound  yen forex',
             'AUDUSD': 'AUD USD aussie dollar forex',
             'USDCAD': 'USD CAD loonie forex',
             'XAUUSD': 'gold XAU precious metals',

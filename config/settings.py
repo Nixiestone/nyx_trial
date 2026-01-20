@@ -96,10 +96,10 @@ class Settings(BaseSettings):
     RISK_PER_TRADE_PERCENT: float = 1.0  # Risk 1% per trade
     
     # Stop Loss and Take Profit - YOU CAN ADJUST
-    SL_PADDING_PIPS: float = 3.0 # Stop loss padding in pips
-    MINIMUM_TP1_RR: 2.0    # Minimum Risk-Reward for TP1
-    TP1 = External liquidity (wherever it is)
-    TP2 = HTF liquidity (wherever it is)
+    SL_PADDING_PIPS: float = 3.0  # Stop loss padding in pips
+    MINIMUM_TP1_RR: float = 2.0  # Minimum Risk-Reward for TP1
+    # TP1 = External liquidity (wherever it is)
+    # TP2 = HTF liquidity (wherever it is)
     PARTIAL_CLOSE_TP1_PERCENT: float = 50.0  # Close 50% at TP1
     MOVE_SL_TO_BREAKEVEN_AT_TP1: bool = True  # Move SL to entry when TP1 hit
     
@@ -163,7 +163,7 @@ class Settings(BaseSettings):
     MARKET_UPDATE_INTERVAL_MINUTES: int = 60  # Update market data every hour
     
     # Auto Trading - CHANGE THIS WHEN READY
-    AUTO_TRADING_ENABLED: bool = Field(default=False, env="AUTO_TRADING_ENABLED")  # KEEP FALSE
+    AUTO_TRADING_ENABLED: bool = Field(default=True, env="AUTO_TRADING_ENABLED")  # KEEP FALSE
     
     # API Rate Limiting - DO NOT CHANGE
     API_RATE_LIMIT_CALLS: int = 1200
@@ -173,8 +173,8 @@ class Settings(BaseSettings):
     SMC_MSS_CONFIRMATION_CANDLES: int = 1  # Candles for MSS confirmation
     SMC_BOS_DOUBLE_BREAK_REQUIRED: bool = True  # Require double BOS
     SMC_FVG_MIN_SIZE_PERCENT: float = 0.1  # Minimum FVG size 0.1%
-    SMC_OB_LOOKBACK_CANDLES: int = 20  # Look back 20 candles for OB
-    SMC_BB_LOOKBACK_CANDLES: int = 30  # Look back 30 candles for BB
+    SMC_OB_LOOKBACK_CANDLES: int = 150  # Look back 150 candles for OB
+    SMC_BB_LOOKBACK_CANDLES: int = 150  # Look back 150 candles for BB
     
     # POI Selection Rules - DO NOT CHANGE
     POI_REQUIRE_INDUCEMENT: bool = True
@@ -187,7 +187,7 @@ class Settings(BaseSettings):
     
     # Security Settings - DO NOT CHANGE
     API_KEY_ENCRYPTION_ENABLED: bool = True
-    REQUIRE_IP_WHITELIST: bool = False  # Set True for production
+    REQUIRE_IP_WHITELIST: bool = True  # Set True for production
     ALLOWED_IPS: List[str] = []  # Add your IPs if whitelist enabled
     
     # Performance Monitoring - DO NOT CHANGE
