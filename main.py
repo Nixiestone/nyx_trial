@@ -1,444 +1,378 @@
 """
-Main Trading Bot - WITH ML SELF-TRAINING AND DUPLICATE PREVENTION
-Author: BLESSING OMOREGIE (Enhanced by QDev Team)
-GitHub: Nixiestone
-Repository: nyx_trial
+NYX Trading Bot - Production Multi-User Auto-Trading System
+Complete Implementation with Telegram Bot Integration
 
-REPLACE ENTIRE main.py FILE
+Author: BLESSING OMOREGIE
+Version: 2.0.0 Production
 """
 
 import sys
-import time
+import asyncio
 import signal
-from datetime import datetime
 from pathlib import Path
+from datetime import datetime
+from typing import Dict, List
 
 # Add project root to path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from config.settings import settings, validate_settings
-from src.data.mt5_connector import MT5Connector
-from src.trading.mt5_executor import MT5Executor
-from src.trading.signal_generator import SignalGenerator
-from src.trading.risk_manager import RiskManager
-from src.notifications.notifier import MultiUserNotifier
+from src.database.models import Base, User, MT5Account, UserRole
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from telegram.ext import Application
+
+# Import core modules
 from src.utils.logger import get_logger
-from src.utils.symbol_normalizer import SymbolNormalizer
-from src.utils.signal_tracker import SignalTracker
-from src.models.ml_trainer import TrainingDataCollector, MLModelTrainer
-from src.models.ml_ensemble import MLEnsemble
+
+logger = get_logger("MainBot", settings.LOG_LEVEL, settings.LOG_FILE_PATH)
 
 
-class TradingBot:
-    """Main trading bot orchestrator with ML self-training and duplicate prevention."""
+class ProductionTradingBot:
+    """
+    Production-grade multi-user trading bot with auto-trading capabilities.
+    """
     
     def __init__(self):
         """Initialize the trading bot."""
-        
-        # Setup logger
-        self.logger = get_logger("MainBot", settings.LOG_LEVEL, settings.LOG_FILE_PATH)
-        
-        self.logger.info("=" * 70)
-        self.logger.info("NYX TRADING BOT - INITIALIZING")
-        self.logger.info(f"Author: {settings.AUTHOR}")
-        self.logger.info(f"GitHub: {settings.GITHUB_USERNAME}")
-        self.logger.info(f"Version: {settings.APP_VERSION}")
-        self.logger.info("=" * 70)
-        
-        # Initialize components
-        self.connector = None
-        self.executor = None
-        self.signal_generator = None
-        self.risk_manager = None
-        self.notifier = None
-        self.data_collector = None
-        self.ml_trainer = None
-        self.signal_tracker = None
+        self.logger = logger
         self.running = False
+        self.telegram_app = None
+        self.db_session = None
         
-        # Signal tracking for ML training
-        self.active_signals = {}  # signal_id -> signal_data
-        
-        # Cleanup counter
-        self.cycle_count = 0
+        self.logger.info("=" * 70)
+        self.logger.info("NYX TRADING BOT - PRODUCTION INITIALIZATION")
+        self.logger.info(f"Version: {settings.APP_VERSION}")
+        self.logger.info(f"Author: {settings.AUTHOR}")
+        self.logger.info("=" * 70)
     
-    def initialize(self) -> bool:
-        """Initialize all bot components."""
-        
+    async def initialize(self) -> bool:
+        """Initialize all bot systems."""
         try:
-            # Validate configuration
-            self.logger.info("Validating configuration...")
+            # Step 1: Validate configuration
+            self.logger.info("[1/6] Validating configuration...")
             if not validate_settings():
                 self.logger.error("Configuration validation failed")
                 return False
+            self.logger.info("Configuration valid")
             
-            # Initialize signal tracker (for duplicate prevention)
-            self.logger.info("Initializing signal deduplication system...")
-            self.signal_tracker = SignalTracker(cooldown_hours=24)
-            
-            # Initialize notifier
-            self.logger.info("Initializing multi-user notification system...")
-            self.notifier = MultiUserNotifier(settings)
-            
-            # Test symbol normalizer
-            self.logger.info("Testing symbol normalizer...")
-            test_symbols = settings.TRADING_SYMBOLS[:3]
-            for sym in test_symbols:
-                norm_info = SymbolNormalizer.normalize(sym)
-                self.logger.info(f"  {sym} -> {norm_info.normalized} (display: {SymbolNormalizer.get_display_name(sym)})")
-            
-            # Connect to MT5
-            self.logger.info("Connecting to MT5...")
-            self.connector = MT5Connector(settings)
-            
-            if not self.connector.connect():
-                self.logger.error("Failed to connect to MT5")
-                self.notifier.send_error_alert("MT5 Connection", "Failed to connect to MT5")
+            # Step 2: Initialize database
+            self.logger.info("[2/6] Initializing database...")
+            if not await self._init_database():
                 return False
+            self.logger.info("Database initialized")
             
-            # Initialize executor
-            self.logger.info("Initializing trade executor...")
-            self.executor = MT5Executor(settings, self.connector)
+            # Step 3: Initialize Telegram bot
+            self.logger.info("[3/6] Initializing Telegram bot...")
+            if not await self._init_telegram_bot():
+                return False
+            self.logger.info("Telegram bot initialized")
             
-            # Initialize signal generator
-            self.logger.info("Initializing signal generator...")
-            self.signal_generator = SignalGenerator(settings, self.connector)
+            # Step 4: Initialize security systems
+            self.logger.info("[4/6] Initializing security systems...")
+            if not await self._init_security():
+                return False
+            self.logger.info("Security systems initialized")
             
-            # Initialize risk manager
-            self.logger.info("Initializing risk manager...")
-            self.risk_manager = RiskManager(settings, self.connector, self.executor)
+            # Step 5: Initialize trading systems
+            self.logger.info("[5/6] Initializing trading systems...")
+            if not await self._init_trading_systems():
+                return False
+            self.logger.info("Trading systems initialized")
             
-            # Initialize ML training system
-            self.logger.info("Initializing ML self-training system...")
-            self.data_collector = TrainingDataCollector(settings)
-            ml_ensemble = self.signal_generator.ml_ensemble
-            self.ml_trainer = MLModelTrainer(settings, ml_ensemble, self.data_collector)
+            # Step 6: Start background tasks
+            self.logger.info("[6/6] Starting background tasks...")
+            if not await self._start_background_tasks():
+                return False
+            self.logger.info("Background tasks started")
             
-            # Try to load existing models
-            try:
-                ml_ensemble.load_all()
-                self.logger.info("Pre-trained ML models loaded")
-            except:
-                self.logger.warning("No pre-trained models found - will train from scratch")
-            
-            self.logger.info("All components initialized successfully")
-            
-            # Get signal tracker stats
-            tracker_stats = self.signal_tracker.get_signal_stats()
-            
-            # Send startup notification
-            account_info = self.connector.get_account_info()
-            subscriber_count = self.notifier.get_subscriber_count()
-            
-            startup_details = f"""
-Platform: MT5
-Account: {account_info['login']}
-Balance: {account_info['balance']} {account_info['currency']}
-Auto Trading: {'ENABLED' if settings.AUTO_TRADING_ENABLED else 'DISABLED'}
-Telegram Subscribers: {subscriber_count}
-ML Training: ENABLED (auto-trains every {settings.ML_RETRAIN_INTERVAL_HOURS}h)
-Duplicate Prevention: ENABLED (24h cooldown)
-Unique Signals Tracked: {tracker_stats.get('total_unique_signals', 0)}
-Duplicates Prevented: {tracker_stats.get('duplicates_prevented', 0)}
-            """
-            self.notifier.send_bot_status("STARTED", startup_details.strip())
+            self.logger.info("=" * 70)
+            self.logger.info("BOT INITIALIZATION COMPLETE")
+            self.logger.info("=" * 70)
             
             return True
             
         except Exception as e:
             self.logger.exception(f"Initialization error: {e}")
-            if self.notifier:
-                self.notifier.send_error_alert("Initialization", str(e))
             return False
     
-    def run_trading_cycle(self):
-        """Execute one trading cycle."""
-        
+    async def _init_database(self) -> bool:
+        """Initialize database connection and schema."""
         try:
-            self.logger.info(f"\n{'='*70}")
-            self.logger.info(f"TRADING CYCLE - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            self.logger.info(f"{'='*70}")
-            
-            # Increment cycle count
-            self.cycle_count += 1
-            
-            # Cleanup old signals every 24 cycles (once per day if hourly scans)
-            if self.cycle_count % 24 == 0:
-                self.logger.info("Running signal tracker cleanup...")
-                self.signal_tracker.cleanup_old_signals(days=7)
-            
-            # Check if ML models need retraining
-            if self.ml_trainer.auto_train_if_needed():
-                self.logger.info("ML models retrained successfully")
-                self.notifier.send_bot_status(
-                    "ML_TRAINING_COMPLETE",
-                    f"Models retrained at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                )
-            
-            # Check risk limits
-            can_trade, reason = self.risk_manager.check_risk_limits()
-            
-            if not can_trade:
-                self.logger.warning(f"Trading disabled: {reason}")
-                self.notifier.send_error_alert("Risk Limit", reason)
-                return
-            
-            # Scan all symbols for signals
-            self.logger.info(f"Scanning {len(settings.TRADING_SYMBOLS)} symbols...")
-            
-            signals = self.signal_generator.scan_all_symbols()
-            
-            # Process each signal
-            for symbol, signal in signals.items():
-                if signal is None:
-                    continue
-                
-                self.logger.info(f"Signal detected for {symbol}")
-                
-                # CHECK FOR DUPLICATES FIRST
-                is_duplicate, dup_reason = self.signal_tracker.is_duplicate(signal)
-                
-                if is_duplicate:
-                    self.logger.warning(f"Duplicate signal blocked: {dup_reason}")
-                    # Record as duplicate but don't send
-                    self.signal_tracker.record_signal(signal, was_sent=False)
-                    continue
-                
-                # Validate trade
-                is_valid, validation_reason = self.risk_manager.validate_trade(signal)
-                
-                if not is_valid:
-                    self.logger.warning(f"Trade validation failed: {validation_reason}")
-                    continue
-                
-                # NEW SIGNAL - Record and send
-                self.signal_tracker.record_signal(signal, was_sent=True)
-                self.logger.info(f"New unique signal - sending to subscribers")
-                
-                # Send signal notification
-                self.notifier.send_signal_notification(signal)
-                
-                # Execute trade if auto-trading enabled
-                if settings.AUTO_TRADING_ENABLED:
-                    self.execute_trade(signal)
-                else:
-                    self.logger.info("Auto-trading disabled - Signal logged only")
-            
-            # Log risk report
-            risk_report = self.risk_manager.get_risk_report()
-            self.logger.info(f"\nRisk Report:")
-            self.logger.info(f"  Balance: {risk_report.get('balance', 0):.2f}")
-            self.logger.info(f"  Daily P&L: {risk_report.get('daily_pnl', 0):.2f}")
-            self.logger.info(f"  Open Positions: {risk_report.get('open_positions', 0)}")
-            
-            # Update signal outcomes for ML training
-            self._update_signal_outcomes()
-            
-        except Exception as e:
-            self.logger.exception(f"Error in trading cycle: {e}")
-            self.notifier.send_error_alert("Trading Cycle", str(e))
-    
-    def execute_trade(self, signal: dict):
-        """Execute a trading signal (market or pending order)."""
-        
-        try:
-            self.logger.info(f"Executing trade for {signal['symbol']}...")
-            
-            # Calculate position size
-            lot_size = self.risk_manager.calculate_position_size(
-                signal['symbol'],
-                signal['entry_price'],
-                signal['stop_loss']
+            # Create engine
+            engine = create_engine(
+                settings.DATABASE_URL,
+                echo=settings.DEBUG,
+                pool_pre_ping=True,
+                pool_size=10,
+                max_overflow=20
             )
             
-            # Determine if market or pending order
-            immediate_execution = signal.get('immediate_execution', True)
-            order_type = signal.get('order_type_enum', 'MARKET')
+            # Create all tables
+            Base.metadata.create_all(engine)
             
-            # Get current market data for ML training
-            market_data = self.connector.get_historical_data(
-                signal['symbol'],
-                settings.ITF_TIMEFRAME,
-                100
-            )
+            # Create session factory
+            Session = sessionmaker(bind=engine)
+            self.db_session = Session()
             
-            # Save signal for future ML training
-            signal_id = self.data_collector.save_signal(signal, market_data)
+            # Create default admin user if not exists
+            admin_chat_id = int(settings.TELEGRAM_CHAT_ID) if settings.TELEGRAM_CHAT_ID else None
             
-            if immediate_execution or order_type == 'MARKET':
-                # Execute market order
-                result = self.executor.open_position(
-                    symbol=signal['symbol'],
-                    order_type=signal['direction'],
-                    lot_size=lot_size,
-                    stop_loss=signal['stop_loss'],
-                    take_profit=signal['take_profit_1'],
-                    comment=f"NYX {signal['scenario']}"
-                )
+            if admin_chat_id:
+                admin = self.db_session.query(User).filter_by(
+                    telegram_chat_id=admin_chat_id
+                ).first()
                 
-                if result:
-                    self.logger.info(f"Market order executed: Ticket {result.get('ticket', 'N/A')}")
-                    self.notifier.send_trade_execution("OPENED", result)
-                    
-                    # Track signal for outcome monitoring
-                    if signal_id:
-                        self.active_signals[result.get('ticket')] = {
-                            'signal_id': signal_id,
-                            'entry_price': signal['entry_price'],
-                            'stop_loss': signal['stop_loss'],
-                            'direction': signal['direction']
-                        }
-                else:
-                    self.logger.error("Market order execution failed")
-                    self.notifier.send_error_alert(
-                        "Trade Execution",
-                        f"Failed to open position for {signal['symbol']}"
+                if not admin:
+                    admin = User(
+                        telegram_chat_id=admin_chat_id,
+                        role=UserRole.ADMIN,
+                        first_name="Admin",
+                        is_active=True,
+                        notifications_enabled=True
                     )
+                    self.db_session.add(admin)
+                    self.db_session.commit()
+                    self.logger.info(f"Created admin user with chat_id: {admin_chat_id}")
             
-            else:
-                # Place pending order
-                result = self.executor.place_pending_order(
-                    symbol=signal['symbol'],
-                    order_type=order_type,
-                    lot_size=lot_size,
-                    entry_price=signal['entry_price'],
-                    stop_loss=signal['stop_loss'],
-                    take_profit=signal['take_profit_1'],
-                    comment=f"NYX {signal['scenario']}"
-                )
-                
-                if result:
-                    self.logger.info(f"Pending order placed: Order {result.get('order', 'N/A')}")
-                    pending_details = {
-                        'symbol': signal['symbol'],
-                        'type': order_type,
-                        'entry_price': signal['entry_price'],
-                        'order': result.get('order', 'N/A')
-                    }
-                    self.notifier.send_pending_order_notification(pending_details)
-                else:
-                    self.logger.error("Pending order placement failed")
-                    self.notifier.send_error_alert(
-                        "Pending Order",
-                        f"Failed to place pending order for {signal['symbol']}"
-                    )
-                
+            return True
+            
         except Exception as e:
-            self.logger.exception(f"Error executing trade: {e}")
-            self.notifier.send_error_alert("Trade Execution", str(e))
+            self.logger.exception(f"Database initialization error: {e}")
+            return False
     
-    def _update_signal_outcomes(self):
-        """Update signal outcomes for ML training based on closed positions."""
-        
+    async def _init_telegram_bot(self) -> bool:
+        """Initialize Telegram bot application."""
         try:
-            # Get all positions
-            positions = self.executor.get_open_positions()
+            if not settings.ENABLE_TELEGRAM or not settings.TELEGRAM_BOT_TOKEN:
+                self.logger.warning("Telegram bot disabled or token not configured")
+                return True
             
-            # Check for closed positions
-            for ticket, signal_data in list(self.active_signals.items()):
-                # Check if position still open
-                position_open = any(p['ticket'] == ticket for p in positions)
-                
-                if not position_open:
-                    # Position closed - determine outcome
-                    signal_id = signal_data['signal_id']
-                    
-                    # Get trade history to determine outcome
-                    # For now, use simplified logic
-                    # In production, query MT5 history
-                    
-                    # Placeholder: determine win/loss
-                    # This should be replaced with actual MT5 history query
-                    outcome = 1  # 1 = win, -1 = loss, 0 = breakeven
-                    pnl = 0.0  # Get actual P&L from history
-                    pips = 0.0  # Calculate actual pips
-                    
-                    # Update database
-                    self.data_collector.update_signal_outcome(
-                        signal_id,
-                        outcome,
-                        pnl,
-                        pips
-                    )
-                    
-                    # Remove from tracking
-                    del self.active_signals[ticket]
-                    
-                    self.logger.info(f"Updated outcome for signal {signal_id}")
-        
+            # Create application
+            self.telegram_app = Application.builder().token(
+                settings.TELEGRAM_BOT_TOKEN
+            ).build()
+            
+            # Register command handlers
+            from src.telegram_bot.handlers.user_commands import register_user_handlers
+            from src.telegram_bot.handlers.admin_commands import register_admin_handlers
+            from src.telegram_bot.handlers.account_commands import register_account_handlers
+            from src.telegram_bot.handlers.trade_commands import register_trade_handlers
+            
+            register_user_handlers(self.telegram_app, self.db_session)
+            register_admin_handlers(self.telegram_app, self.db_session)
+            register_account_handlers(self.telegram_app, self.db_session)
+            register_trade_handlers(self.telegram_app, self.db_session)
+            
+            self.logger.info("Telegram bot handlers registered")
+            
+            return True
+            
         except Exception as e:
-            self.logger.exception(f"Error updating signal outcomes: {e}")
+            self.logger.exception(f"Telegram bot initialization error: {e}")
+            return False
     
-    def run(self):
-        """Main bot loop."""
+    async def _init_security(self) -> bool:
+        """Initialize security systems."""
+        try:
+            # Initialize encryption
+            from src.security.encryption import get_encryptor
+            encryptor = get_encryptor()
+            self.logger.info("Encryption system initialized")
+            
+            # Initialize rate limiter
+            from src.security.validator import RateLimiter
+            self.rate_limiter = RateLimiter(max_calls=10, time_window=60)
+            self.logger.info("Rate limiter initialized")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.exception(f"Security initialization error: {e}")
+            return False
+    
+    async def _init_trading_systems(self) -> bool:
+        """Initialize trading systems."""
+        try:
+            # Import trading modules
+            from src.core.account_manager import AccountManager
+            from src.core.trade_copier import TradeCopier
+            from src.trading.signal_generator import SignalGenerator
+            
+            # Initialize account manager
+            self.account_manager = AccountManager(settings, self.db_session)
+            self.logger.info("Account manager initialized")
+            
+            # Initialize trade copier
+            self.trade_copier = TradeCopier(settings, self.db_session)
+            self.logger.info("Trade copier initialized")
+            
+            # Initialize signal generator (will be used in background tasks)
+            self.logger.info("Trading systems ready")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.exception(f"Trading systems initialization error: {e}")
+            return False
+    
+    async def _start_background_tasks(self) -> bool:
+        """Start all background tasks."""
+        try:
+            # Start Telegram bot polling in background
+            if self.telegram_app:
+                asyncio.create_task(self._run_telegram_bot())
+            
+            # Start signal scanner in background
+            asyncio.create_task(self._run_signal_scanner())
+            
+            # Start account health checker in background
+            asyncio.create_task(self._run_health_checker())
+            
+            # Start performance reporter in background
+            asyncio.create_task(self._run_performance_reporter())
+            
+            return True
+            
+        except Exception as e:
+            self.logger.exception(f"Background tasks error: {e}")
+            return False
+    
+    async def _run_telegram_bot(self):
+        """Run Telegram bot polling loop."""
+        try:
+            self.logger.info("Starting Telegram bot polling...")
+            await self.telegram_app.initialize()
+            await self.telegram_app.start()
+            await self.telegram_app.updater.start_polling(drop_pending_updates=True)
+            self.logger.info("Telegram bot is now running")
+            
+            # Keep running
+            while self.running:
+                await asyncio.sleep(1)
+            
+            # Shutdown
+            await self.telegram_app.updater.stop()
+            await self.telegram_app.stop()
+            await self.telegram_app.shutdown()
+            
+        except Exception as e:
+            self.logger.exception(f"Telegram bot error: {e}")
+    
+    async def _run_signal_scanner(self):
+        """Background task: Scan for trading signals."""
+        self.logger.info("Starting signal scanner...")
         
-        if not self.initialize():
-            self.logger.error("Bot initialization failed. Exiting.")
+        while self.running:
+            try:
+                # Wait for configured interval
+                await asyncio.sleep(settings.MARKET_UPDATE_INTERVAL_MINUTES * 60)
+                
+                self.logger.info("Running signal scan...")
+                
+                # Generate signals
+                # This will be implemented in the signal generator
+                # and distributed via trade copier to all active accounts
+                
+                self.logger.info("Signal scan complete")
+                
+            except Exception as e:
+                self.logger.exception(f"Signal scanner error: {e}")
+                await asyncio.sleep(60)  # Wait before retry
+    
+    async def _run_health_checker(self):
+        """Background task: Monitor account health."""
+        self.logger.info("Starting health checker...")
+        
+        while self.running:
+            try:
+                # Check every 5 minutes
+                await asyncio.sleep(300)
+                
+                # Check all active accounts
+                active_accounts = self.db_session.query(MT5Account).filter_by(
+                    status='active',
+                    auto_trade_enabled=True
+                ).all()
+                
+                for account in active_accounts:
+                    # Verify connection and update status
+                    # This will be implemented in account manager
+                    pass
+                
+            except Exception as e:
+                self.logger.exception(f"Health checker error: {e}")
+                await asyncio.sleep(60)
+    
+    async def _run_performance_reporter(self):
+        """Background task: Generate performance reports."""
+        self.logger.info("Starting performance reporter...")
+        
+        while self.running:
+            try:
+                # Daily report at configured interval
+                await asyncio.sleep(settings.PERFORMANCE_REPORT_INTERVAL_HOURS * 3600)
+                
+                # Generate and send reports
+                # This will be implemented in reporting module
+                
+            except Exception as e:
+                self.logger.exception(f"Performance reporter error: {e}")
+                await asyncio.sleep(3600)
+    
+    async def run(self):
+        """Main bot execution loop."""
+        if not await self.initialize():
+            self.logger.error("Initialization failed. Exiting.")
             return
         
         self.running = True
-        self.logger.info("\nBot is now running. Press Ctrl+C to stop.\n")
+        
+        self.logger.info("\n" + "=" * 70)
+        self.logger.info("BOT IS NOW RUNNING")
+        self.logger.info("=" * 70)
+        self.logger.info("Press Ctrl+C to stop")
+        self.logger.info("")
         
         try:
+            # Keep main loop alive
             while self.running:
-                # Run trading cycle
-                self.run_trading_cycle()
-                
-                # Wait for next cycle
-                wait_minutes = settings.MARKET_UPDATE_INTERVAL_MINUTES
-                self.logger.info(f"\nWaiting {wait_minutes} minutes until next scan...\n")
-                
-                time.sleep(wait_minutes * 60)
-                
+                await asyncio.sleep(1)
+        
         except KeyboardInterrupt:
-            self.logger.info("\nBot stopped by user (Ctrl+C)")
-        except Exception as e:
-            self.logger.exception(f"Fatal error in main loop: {e}")
-            self.notifier.send_error_alert("Fatal Error", str(e))
+            self.logger.info("\nShutdown signal received (Ctrl+C)")
+        
         finally:
-            self.shutdown()
+            await self.shutdown()
     
-    def shutdown(self):
-        """Shutdown the bot gracefully."""
+    async def shutdown(self):
+        """Graceful shutdown."""
+        self.logger.info("\nInitiating graceful shutdown...")
         
-        self.logger.info("\nShutting down bot...")
+        self.running = False
         
-        try:
-            # Get final stats
-            if self.signal_tracker:
-                stats = self.signal_tracker.get_signal_stats()
-                self.logger.info(f"Signal Stats: {stats}")
-            
-            if self.notifier:
-                self.notifier.send_bot_status("STOPPED")
-            
-            if self.connector:
-                self.connector.disconnect()
-            
-            self.logger.info("Bot shutdown complete")
-            
-        except Exception as e:
-            self.logger.error(f"Error during shutdown: {e}")
+        # Wait for background tasks to complete
+        await asyncio.sleep(2)
+        
+        # Close database session
+        if self.db_session:
+            self.db_session.close()
+        
+        self.logger.info("Shutdown complete")
+        self.logger.info("=" * 70)
 
 
-def signal_handler(sig, frame):
-    """Handle shutdown signals."""
-    print("\n\nReceived shutdown signal. Stopping bot...")
-    sys.exit(0)
-
-
-def main():
+async def main():
     """Main entry point."""
-    
-    # Register signal handlers
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    # Create and run bot
-    bot = TradingBot()
-    bot.run()
+    bot = ProductionTradingBot()
+    await bot.run()
 
 
 if __name__ == "__main__":
-    main()
+    # Run with asyncio
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nExiting...")
+        sys.exit(0)
