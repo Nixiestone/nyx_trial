@@ -15,10 +15,8 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 try:
-    import tensorflow as tf
     from tensorflow import keras
-    layers = keras.layers
-    
+    from tensorflow.keras import layers
     TENSORFLOW_AVAILABLE = True
 except ImportError:
     TENSORFLOW_AVAILABLE = False
