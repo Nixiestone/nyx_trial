@@ -1,27 +1,19 @@
-"""
-Telegram Bot Account Management Handler
-Handles: /addaccount, /myaccounts, /removeaccount, /testconnection
-
-Author: BLESSING OMOREGIE
-"""
-
 from telegram import Update
 from telegram.ext import (
     ContextTypes, CommandHandler, CallbackQueryHandler,
     ConversationHandler, MessageHandler, filters
 )
 from sqlalchemy.orm import Session
-from src.database.models import User, MT5Account, UserRole
+from src.database.models import User, MT5Account, UserRole, AccountStatus  # FIXED: Added AccountStatus
 from src.core.account_manager import AccountManager
 from src.telegram_bot.keyboards import BotKeyboards
 from src.security.validator import InputValidator
 
-# Conversation states
 ACCOUNT_NAME, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER = range(4)
 
 
 class AccountCommandHandler:
-    """Handles account management commands."""
+    """Handles account management commands - FIXED VERSION"""
     
     def __init__(self, config, db_session: Session):
         self.config = config
@@ -31,7 +23,7 @@ class AccountCommandHandler:
         self.account_manager = AccountManager(config, db_session)
     
     async def add_account_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start account addition conversation."""
+        """Start account addition conversation"""
         try:
             chat_id = update.effective_chat.id
             
@@ -40,10 +32,10 @@ class AccountCommandHandler:
                 await update.message.reply_text("Please use /start first.")
                 return ConversationHandler.END
             
-            # Check account limit
+            # FIXED: Use AccountStatus Enum
             existing_count = self.db.query(MT5Account).filter_by(
                 user_id=user.id,
-                status='active'
+                status=AccountStatus.ACTIVE  # ✅ FIXED
             ).count()
             
             max_accounts = 999 if user.role == UserRole.ADMIN else 5
@@ -68,7 +60,7 @@ class AccountCommandHandler:
             return ConversationHandler.END
     
     async def account_name_received(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Process account name."""
+        """Process account name"""
         try:
             account_name = self.validator.validate_account_name(update.message.text)
             context.user_data['account_name'] = account_name
@@ -89,12 +81,11 @@ class AccountCommandHandler:
             return ACCOUNT_NAME
     
     async def mt5_login_received(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Process MT5 login."""
+        """Process MT5 login"""
         try:
             mt5_login = self.validator.validate_mt5_login(update.message.text)
             context.user_data['mt5_login'] = mt5_login
             
-            # Delete the message containing login for security
             await update.message.delete()
             
             await update.effective_chat.send_message(
@@ -114,7 +105,7 @@ class AccountCommandHandler:
             return MT5_LOGIN
     
     async def mt5_password_received(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Process MT5 password."""
+        """Process MT5 password"""
         try:
             password = update.message.text.strip()
             
@@ -127,7 +118,6 @@ class AccountCommandHandler:
             
             context.user_data['mt5_password'] = password
             
-            # DELETE PASSWORD MESSAGE IMMEDIATELY
             await update.message.delete()
             
             await update.effective_chat.send_message(
@@ -147,14 +137,13 @@ class AccountCommandHandler:
             return MT5_PASSWORD
     
     async def mt5_server_received(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Process MT5 server and create account."""
+        """Process MT5 server and create account"""
         try:
             server = self.validator.sanitize_string(update.message.text, max_length=100)
             
             chat_id = update.effective_chat.id
             user = self.db.query(User).filter_by(telegram_chat_id=chat_id).first()
             
-            # Get saved data
             account_name = context.user_data['account_name']
             mt5_login = context.user_data['mt5_login']
             mt5_password = context.user_data['mt5_password']
@@ -164,7 +153,6 @@ class AccountCommandHandler:
                 "This may take a few seconds."
             )
             
-            # Add account via AccountManager
             account = self.account_manager.add_account(
                 user_id=user.id,
                 account_name=account_name,
@@ -173,10 +161,9 @@ class AccountCommandHandler:
                 mt5_server=server
             )
             
-            # Clear sensitive data
             del context.user_data['mt5_password']
             
-            if account and account.status.value == 'active':
+            if account and account.status == AccountStatus.ACTIVE:  # FIXED
                 await update.message.reply_text(
                     f"SUCCESS! Account added and connection verified.\n\n"
                     f"Account Name: {account_name}\n"
@@ -210,8 +197,7 @@ class AccountCommandHandler:
             return ConversationHandler.END
     
     async def cancel_add_account(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Cancel account addition."""
-        # Clear any sensitive data
+        """Cancel account addition"""
         if 'mt5_password' in context.user_data:
             del context.user_data['mt5_password']
         
@@ -222,7 +208,7 @@ class AccountCommandHandler:
         return ConversationHandler.END
     
     async def my_accounts_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """List user's MT5 accounts."""
+        """List user's MT5 accounts"""
         try:
             chat_id = update.effective_chat.id
             user = self.db.query(User).filter_by(telegram_chat_id=chat_id).first()
@@ -243,24 +229,25 @@ class AccountCommandHandler:
             msg = "YOUR MT5 ACCOUNTS:\n\n"
             
             for idx, account in enumerate(accounts, 1):
-                status_icon = {
-                    'active': '✅',
-                    'inactive': '⭕',
-                    'pending': '⏳',
-                    'error': '❌'
-                }.get(account.status.value, '❓')
+                status_text = {
+                    AccountStatus.ACTIVE: 'ACTIVE',
+                    AccountStatus.INACTIVE: 'INACTIVE',
+                    AccountStatus.PENDING: 'PENDING',
+                    AccountStatus.ERROR: 'ERROR'
+                }.get(account.status, 'UNKNOWN')  # FIXED
                 
-                auto_trade_status = '🟢 ENABLED' if account.auto_trade_enabled else '🔴 DISABLED'
+                auto_trade_status = 'ENABLED' if account.auto_trade_enabled else 'DISABLED'
                 
-                msg += f"{idx}. {status_icon} {account.account_name}\n"
+                msg += f"{idx}. {account.account_name}\n"
                 msg += f"   Login: {account.mt5_login}\n"
                 msg += f"   Server: {account.mt5_server}\n"
                 msg += f"   Currency: {account.account_currency}\n"
                 msg += f"   Balance: {account.account_balance:.2f}\n"
                 msg += f"   Auto-Trade: {auto_trade_status}\n"
+                msg += f"   Status: {status_text}\n"
                 msg += f"   Last Connected: {account.last_connected.strftime('%Y-%m-%d %H:%M') if account.last_connected else 'Never'}\n"
                 
-                if account.status.value == 'error':
+                if account.status == AccountStatus.ERROR:  # FIXED
                     msg += f"   Error: {account.last_error[:50]}...\n"
                 
                 msg += "\n"
@@ -274,7 +261,7 @@ class AccountCommandHandler:
             await update.message.reply_text(f"Error: {str(e)}")
     
     async def test_connection_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Test MT5 connection for an account."""
+        """Test MT5 connection for an account - FIXED"""
         try:
             chat_id = update.effective_chat.id
             user = self.db.query(User).filter_by(telegram_chat_id=chat_id).first()
@@ -283,40 +270,57 @@ class AccountCommandHandler:
                 await update.message.reply_text("Please use /start first.")
                 return
             
-            # Get account number from command
-            if not context.args or not context.args[0].isdigit():
+            # FIXED: Validate input properly
+            if not context.args:
                 await update.message.reply_text(
                     "Usage: /testconnection <account_number>\n\n"
+                    "Example: /testconnection 1\n\n"
                     "Use /myaccounts to see your account numbers."
                 )
                 return
             
-            account_idx = int(context.args[0]) - 1
-            
-            accounts = self.db.query(MT5Account).filter_by(user_id=user.id).all()
-            
-            if account_idx < 0 or account_idx >= len(accounts):
+            # FIXED: Better error handling
+            try:
+                account_number = int(context.args[0])
+            except ValueError:
                 await update.message.reply_text(
-                    f"Invalid account number. You have {len(accounts)} account(s)."
+                    "Invalid account number. Please use a number.\n\n"
+                    "Example: /testconnection 1\n\n"
+                    "Use /myaccounts to see your accounts."
                 )
                 return
             
-            account = accounts[account_idx]
+            # FIXED: Get accounts and validate index
+            accounts = self.db.query(MT5Account).filter_by(user_id=user.id).all()
+            
+            if not accounts:
+                await update.message.reply_text("You don't have any accounts. Use /addaccount to add one.")
+                return
+            
+            # FIXED: Proper bounds checking
+            if account_number < 1 or account_number > len(accounts):
+                await update.message.reply_text(
+                    f"Invalid account number. You have {len(accounts)} account(s).\n\n"
+                    f"Valid numbers: 1 to {len(accounts)}\n\n"
+                    "Use /myaccounts to see your accounts."
+                )
+                return
+            
+            # FIXED: Correct indexing (user enters 1-based, array is 0-based)
+            account = accounts[account_number - 1]
             
             await update.message.reply_text(
                 f"Testing connection to {account.account_name}...\n"
                 "Please wait..."
             )
             
-            # Test connection
             success = self.account_manager.test_connection(account.id)
             
             if success:
-                # Refresh account data
                 self.db.refresh(account)
                 
                 await update.message.reply_text(
-                    f"✅ CONNECTION SUCCESSFUL\n\n"
+                    f"CONNECTION SUCCESSFUL\n\n"
                     f"Account: {account.account_name}\n"
                     f"Login: {account.mt5_login}\n"
                     f"Server: {account.mt5_server}\n"
@@ -328,7 +332,7 @@ class AccountCommandHandler:
                 )
             else:
                 await update.message.reply_text(
-                    f"❌ CONNECTION FAILED\n\n"
+                    f"CONNECTION FAILED\n\n"
                     f"Account: {account.account_name}\n"
                     f"Login: {account.mt5_login}\n"
                     f"Server: {account.mt5_server}\n\n"
@@ -345,12 +349,11 @@ class AccountCommandHandler:
 
 
 def register_account_handlers(application, db_session: Session):
-    """Register all account management handlers."""
+    """Register all account management handlers"""
     from config.settings import settings
     
     handler = AccountCommandHandler(settings, db_session)
     
-    # Add account conversation handler
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('addaccount', handler.add_account_start)],
         states={

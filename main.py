@@ -1,9 +1,10 @@
 """
 NYX Trading Bot - Production Multi-User Auto-Trading System
-Complete Implementation with Telegram Bot Integration
+COMPLETE UPDATED VERSION WITH ALL FIXES
 
 Author: BLESSING OMOREGIE
 Version: 2.0.0 Production
+GitHub: Nixiestone
 """
 
 import sys
@@ -26,12 +27,24 @@ from telegram.ext import Application
 # Import core modules
 from src.utils.logger import get_logger
 
+# FIXED: Import all handlers including new ones
+from src.telegram_bot.handlers.user_commands import register_user_handlers
+from src.telegram_bot.handlers.admin_commands import register_admin_handlers
+from src.telegram_bot.handlers.account_commands import register_account_handlers
+from src.telegram_bot.handlers.trade_commands import register_trade_handlers
+from src.telegram_bot.handlers.button_handlers import register_button_handlers  # NEW
+from src.telegram_bot.handlers.missing_commands import register_missing_handlers  # NEW
+
+# FIXED: Import message queue for offline message handling
+from src.telegram_bot.message_queue import get_message_queue  # NEW
+
 logger = get_logger("MainBot", settings.LOG_LEVEL, settings.LOG_FILE_PATH)
 
 
 class ProductionTradingBot:
     """
     Production-grade multi-user trading bot with auto-trading capabilities.
+    FIXED VERSION with all bug fixes applied.
     """
     
     def __init__(self):
@@ -40,6 +53,7 @@ class ProductionTradingBot:
         self.running = False
         self.telegram_app = None
         self.db_session = None
+        self.message_queue = get_message_queue()  # NEW: Initialize message queue
         
         self.logger.info("=" * 70)
         self.logger.info("NYX TRADING BOT - PRODUCTION INITIALIZATION")
@@ -100,6 +114,9 @@ class ProductionTradingBot:
     async def _init_database(self) -> bool:
         """Initialize database connection and schema."""
         try:
+            # FIXED: Ensure data directory exists
+            Path("data").mkdir(parents=True, exist_ok=True)
+            
             # Create engine
             engine = create_engine(
                 settings.DATABASE_URL,
@@ -154,18 +171,30 @@ class ProductionTradingBot:
                 settings.TELEGRAM_BOT_TOKEN
             ).build()
             
-            # Register command handlers
-            from src.telegram_bot.handlers.user_commands import register_user_handlers
-            from src.telegram_bot.handlers.admin_commands import register_admin_handlers
-            from src.telegram_bot.handlers.account_commands import register_account_handlers
-            from src.telegram_bot.handlers.trade_commands import register_trade_handlers
+            # FIXED: Register ALL command handlers including new ones
+            self.logger.info("Registering command handlers...")
             
             register_user_handlers(self.telegram_app, self.db_session)
-            register_admin_handlers(self.telegram_app, self.db_session)
-            register_account_handlers(self.telegram_app, self.db_session)
-            register_trade_handlers(self.telegram_app, self.db_session)
+            self.logger.info("  - User commands registered")
             
-            self.logger.info("Telegram bot handlers registered")
+            register_admin_handlers(self.telegram_app, self.db_session)
+            self.logger.info("  - Admin commands registered")
+            
+            register_account_handlers(self.telegram_app, self.db_session)
+            self.logger.info("  - Account commands registered")
+            
+            register_trade_handlers(self.telegram_app, self.db_session)
+            self.logger.info("  - Trade commands registered")
+            
+            # NEW: Register button handlers
+            register_button_handlers(self.telegram_app, self.db_session)
+            self.logger.info("  - Button handlers registered")
+            
+            # NEW: Register missing commands
+            register_missing_handlers(self.telegram_app, self.db_session)
+            self.logger.info("  - Missing commands registered")
+            
+            self.logger.info("All Telegram bot handlers registered successfully")
             
             return True
             
@@ -198,7 +227,6 @@ class ProductionTradingBot:
             # Import trading modules
             from src.core.account_manager import AccountManager
             from src.core.trade_copier import TradeCopier
-            from src.trading.signal_generator import SignalGenerator
             
             # Initialize account manager
             self.account_manager = AccountManager(settings, self.db_session)
@@ -208,7 +236,6 @@ class ProductionTradingBot:
             self.trade_copier = TradeCopier(settings, self.db_session)
             self.logger.info("Trade copier initialized")
             
-            # Initialize signal generator (will be used in background tasks)
             self.logger.info("Trading systems ready")
             
             return True
@@ -233,6 +260,9 @@ class ProductionTradingBot:
             # Start performance reporter in background
             asyncio.create_task(self._run_performance_reporter())
             
+            # NEW: Start message queue processor
+            asyncio.create_task(self._run_message_queue_processor())
+            
             return True
             
         except Exception as e:
@@ -245,6 +275,15 @@ class ProductionTradingBot:
             self.logger.info("Starting Telegram bot polling...")
             await self.telegram_app.initialize()
             await self.telegram_app.start()
+            
+            # NEW: Send queued messages when bot comes online
+            self.logger.info("Processing queued messages from offline period...")
+            stats = await self.message_queue.send_queued_messages(self.telegram_app.bot)
+            if stats['sent'] > 0:
+                self.logger.info(f"Sent {stats['sent']} queued messages that were pending")
+            if stats['failed'] > 0:
+                self.logger.warning(f"{stats['failed']} messages failed to send")
+            
             await self.telegram_app.updater.start_polling(drop_pending_updates=True)
             self.logger.info("Telegram bot is now running")
             
@@ -290,9 +329,12 @@ class ProductionTradingBot:
                 # Check every 5 minutes
                 await asyncio.sleep(300)
                 
+                # FIXED: Use AccountStatus enum
+                from src.database.models import AccountStatus
+                
                 # Check all active accounts
                 active_accounts = self.db_session.query(MT5Account).filter_by(
-                    status='active',
+                    status=AccountStatus.ACTIVE,  # FIXED
                     auto_trade_enabled=True
                 ).all()
                 
@@ -321,6 +363,35 @@ class ProductionTradingBot:
                 self.logger.exception(f"Performance reporter error: {e}")
                 await asyncio.sleep(3600)
     
+    async def _run_message_queue_processor(self):
+        """
+        Background task: Process message queue.
+        NEW: Handles offline message delivery and cleanup
+        """
+        self.logger.info("Starting message queue processor...")
+        
+        while self.running:
+            try:
+                # Process queue every 5 minutes
+                await asyncio.sleep(300)
+                
+                # Send any queued messages
+                if self.telegram_app:
+                    stats = await self.message_queue.send_queued_messages(self.telegram_app.bot)
+                    if stats['sent'] > 0:
+                        self.logger.info(f"Processed message queue: {stats['sent']} sent, {stats['failed']} failed")
+                
+                # Cleanup old messages once per day
+                import random
+                if random.random() < 0.01:  # ~1% chance = roughly once per day
+                    deleted = self.message_queue.cleanup_old_messages(days=7)
+                    if deleted > 0:
+                        self.logger.info(f"Cleaned up {deleted} old messages from queue")
+                
+            except Exception as e:
+                self.logger.exception(f"Message queue processor error: {e}")
+                await asyncio.sleep(60)
+    
     async def run(self):
         """Main bot execution loop."""
         if not await self.initialize():
@@ -334,6 +405,11 @@ class ProductionTradingBot:
         self.logger.info("=" * 70)
         self.logger.info("Press Ctrl+C to stop")
         self.logger.info("")
+        
+        # NEW: Log message queue stats
+        queue_stats = self.message_queue.get_queue_stats()
+        if queue_stats['pending'] > 0:
+            self.logger.info(f"Message queue: {queue_stats['pending']} pending messages")
         
         try:
             # Keep main loop alive
@@ -358,6 +434,11 @@ class ProductionTradingBot:
         # Close database session
         if self.db_session:
             self.db_session.close()
+        
+        # NEW: Log final queue stats
+        queue_stats = self.message_queue.get_queue_stats()
+        if queue_stats['pending'] > 0:
+            self.logger.info(f"Shutdown: {queue_stats['pending']} messages queued for next startup")
         
         self.logger.info("Shutdown complete")
         self.logger.info("=" * 70)

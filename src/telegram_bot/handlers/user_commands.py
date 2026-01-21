@@ -75,9 +75,9 @@ Developer: BLESSING OMOREGIE (Nixiestone)
                 self.db.commit()
                 
                 welcome_msg = f"""
-Welcome back, {first_name}!
+Welcome, {first_name}!
 
-NYX Trading Bot is ready.
+NIXIE TRADES Bot is ready.
 
 Use /help to see available commands.
 Use /myaccounts to manage your MT5 accounts.
@@ -100,7 +100,7 @@ Use /mystats to view your performance.
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /help command."""
         help_text = """
-NYX TRADING BOT - COMMAND REFERENCE
+NIXIE TRADES BOT - COMMAND REFERENCE
 
 ACCOUNT MANAGEMENT:
 /addaccount - Add new MT5 account
@@ -129,7 +129,7 @@ INFORMATION:
 /status - Bot and account status
 /about - About this bot
 
-Need help? Contact: @Nixiestone
+Need help? Contact: https://t.me/Nixiestone
         """
         
         await update.message.reply_text(help_text.strip())
