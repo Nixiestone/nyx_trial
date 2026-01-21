@@ -1,6 +1,6 @@
 """
 Encryption Module for Secure Credential Storage
-Production-Grade Security Implementation
+FIXED VERSION - Compatible with cryptography 41.0.7+
 
 Author: BLESSING OMOREGIE
 """
@@ -9,7 +9,8 @@ import os
 import base64
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.backends import default_backend
 from typing import Optional
 import json
 
@@ -33,7 +34,7 @@ class CredentialEncryption:
             if not master_password:
                 raise ValueError(
                     "MASTER_KEY environment variable not set. "
-                    "Set it with: export MASTER_KEY='your-secure-password-here'"
+                    "Set it with: [System.Environment]::SetEnvironmentVariable('MASTER_KEY', 'your-key', 'User')"
                 )
         
         self.salt = self._get_or_create_salt()
@@ -51,7 +52,6 @@ class CredentialEncryption:
             os.makedirs('config', exist_ok=True)
             with open(salt_file, 'wb') as f:
                 f.write(salt)
-            # Restrict file permissions (Unix-like systems)
             try:
                 os.chmod(salt_file, 0o600)
             except:
@@ -60,11 +60,12 @@ class CredentialEncryption:
     
     def _derive_cipher(self, password: str) -> Fernet:
         """Derive encryption cipher from password using PBKDF2."""
-        kdf = PBKDF2(
+        kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
             salt=self.salt,
             iterations=100000,
+            backend=default_backend()
         )
         key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
         return Fernet(key)
@@ -123,7 +124,6 @@ class CredentialEncryption:
         return json.loads(json_str)
 
 
-# Global encryption instance
 _encryptor: Optional[CredentialEncryption] = None
 
 
