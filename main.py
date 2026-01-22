@@ -1,22 +1,25 @@
 """
 NYX Trading Bot - Production Main Entry Point
-COMPLETE ASYNC REWRITE with Auto-Reconnect Heartbeat
+FIXED VERSION - Correct Import Order
 
-Version: 2.0.0 Production
-Author: BLESSING OMOREGIE (Enhanced by Elite QDev Team)
+Version: 2.0.1 Production
+Author: BLESSING OMOREGIE (Fixed by Elite QDev Team)
 """
 
 import sys
 import asyncio
 import signal
 from pathlib import Path
-from datetime import datetime
-from typing import Dict, List
 
 # Add project root to path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
+# CRITICAL: Load environment variables FIRST
+import load_env
+load_env.load_environment()
+
+# Now import everything else
 from config.settings import settings, validate_settings
 from src.database.models import Base, User, MT5Account, UserRole, AccountStatus
 from sqlalchemy import create_engine
@@ -253,7 +256,7 @@ class ProductionTradingBot:
             asyncio.create_task(self._run_health_checker())
             asyncio.create_task(self._run_performance_reporter())
             asyncio.create_task(self._run_message_queue_processor())
-            asyncio.create_task(self._run_mt5_heartbeat())  # NEW: MT5 reconnection heartbeat
+            asyncio.create_task(self._run_mt5_heartbeat())
             
             return True
             
@@ -289,25 +292,19 @@ class ProductionTradingBot:
             self.logger.exception(f"Telegram bot error: {e}")
     
     async def _run_mt5_heartbeat(self):
-        """
-        MT5 Auto-Reconnect Heartbeat
-        Checks connection every 60 seconds and reconnects if dropped
-        """
+        """MT5 Auto-Reconnect Heartbeat"""
         self.logger.info("Starting MT5 heartbeat...")
         
         while self.running:
             try:
-                await asyncio.sleep(60)  # Check every minute
+                await asyncio.sleep(60)
                 
-                # Check if MT5 connector exists
                 if not self.mt5_connector:
                     continue
                 
-                # Check connection
                 if not self.mt5_connector.check_connection():
                     self.logger.warning("MT5 connection lost. Attempting reconnect...")
                     
-                    # Attempt reconnection
                     if self.mt5_connector.connect():
                         self.logger.info("MT5 reconnected successfully")
                     else:
@@ -339,15 +336,12 @@ class ProductionTradingBot:
         
         while self.running:
             try:
-                await asyncio.sleep(300)  # Every 5 minutes
+                await asyncio.sleep(300)
                 
-                # Check active accounts
                 active_accounts = self.db_session.query(MT5Account).filter_by(
                     status=AccountStatus.ACTIVE,
                     auto_trade_enabled=True
                 ).all()
-                
-                # Health checks here
                 
             except Exception as e:
                 self.logger.exception(f"Health checker error: {e}")
@@ -361,8 +355,6 @@ class ProductionTradingBot:
             try:
                 await asyncio.sleep(settings.PERFORMANCE_REPORT_INTERVAL_HOURS * 3600)
                 
-                # Generate and send reports
-                
             except Exception as e:
                 self.logger.exception(f"Performance reporter error: {e}")
                 await asyncio.sleep(3600)
@@ -373,15 +365,13 @@ class ProductionTradingBot:
         
         while self.running:
             try:
-                await asyncio.sleep(300)  # Every 5 minutes
+                await asyncio.sleep(300)
                 
-                # Process queue
                 if self.telegram_app:
                     stats = await self.message_queue.send_queued_messages(self.telegram_app.bot)
                     if stats['sent'] > 0:
                         self.logger.info(f"Queue: {stats['sent']} sent, {stats['failed']} failed")
                 
-                # Cleanup old messages occasionally
                 import random
                 if random.random() < 0.01:
                     deleted = self.message_queue.cleanup_old_messages(days=7)
@@ -407,7 +397,6 @@ class ProductionTradingBot:
         self.logger.info("")
         
         try:
-            # Wait for shutdown signal
             await self.shutdown_event.wait()
         
         except KeyboardInterrupt:
@@ -423,18 +412,14 @@ class ProductionTradingBot:
         self.running = False
         self.shutdown_event.set()
         
-        # Wait for background tasks to complete
         await asyncio.sleep(2)
         
-        # Close database
         if self.db_session:
             self.db_session.close()
         
-        # Disconnect MT5
         if self.mt5_connector:
             self.mt5_connector.disconnect()
         
-        # Log final stats
         queue_stats = self.message_queue.get_queue_stats()
         if queue_stats['pending'] > 0:
             self.logger.info(f"Shutdown: {queue_stats['pending']} messages queued")
@@ -447,7 +432,6 @@ async def main():
     """Async main entry point"""
     bot = ProductionTradingBot()
     
-    # Setup signal handlers for graceful shutdown
     def signal_handler(sig, frame):
         bot.shutdown_event.set()
     

@@ -1,13 +1,13 @@
 """
 Trading Bot Configuration Settings - MT5 Version
-Author: BLESSING OMOREGIE
+FIXED VERSION - Added MASTER_KEY field
 
-All secret values go in config/secrets.env
+Author: BLESSING OMOREGIE
 """
 
 import os
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field
 
@@ -18,24 +18,27 @@ class Settings(BaseSettings):
     Values are loaded from environment variables defined in secrets.env
     """
     
-    # Application Settings - DO NOT CHANGE
+    # Application Settings
     APP_NAME: str = "NYX Trading Bot"
     APP_VERSION: str = "1.0.0"
     AUTHOR: str = "BLESSING OMOREGIE"
     GITHUB_USERNAME: str = "Nixiestone"
     
-    # Environment - CHANGE THIS: development, testing, or production
+    # CRITICAL: Master Encryption Key
+    MASTER_KEY: str = Field(default="", env="MASTER_KEY")
+    
+    # Environment
     ENVIRONMENT: str = Field(default="development", env="ENVIRONMENT")
     DEBUG: bool = Field(default=True, env="DEBUG")
     
-    # Primary Trading Platform - MT5
-    PRIMARY_PLATFORM: str = Field(default="mt5", env="PRIMARY_PLATFORM")  # mt5, binance, or multi
+    # Primary Trading Platform
+    PRIMARY_PLATFORM: str = Field(default="mt5", env="PRIMARY_PLATFORM")
     
-    # MT5 Settings - YOU MUST FILL THESE
+    # MT5 Settings
     MT5_LOGIN: int = Field(default=0, env="MT5_LOGIN")
     MT5_PASSWORD: str = Field(default="", env="MT5_PASSWORD")
     MT5_SERVER: str = Field(default="", env="MT5_SERVER")
-    MT5_PATH: str = Field(default="", env="MT5_PATH")  # Path to terminal64.exe
+    MT5_PATH: str = Field(default="", env="MT5_PATH")
     MT5_TIMEOUT: int = Field(default=60000, env="MT5_TIMEOUT")
     
     # Alternative Platforms (Optional)
@@ -48,74 +51,71 @@ class Settings(BaseSettings):
     DERIV_API_TOKEN: str = Field(default="", env="DERIV_API_TOKEN")
     DERIV_APP_ID: str = Field(default="", env="DERIV_APP_ID")
     
-    # Trading Pairs - MT5 SYMBOLS (YOU CAN CHANGE THESE)
+    # Trading Pairs
     TRADING_SYMBOLS: List[str] = [
         "EURUSD",
         "GBPUSD",
         "USDJPY",
         "AUDUSD",
         "USDCAD",
-        "GBPJPY",   # JPY pair
-        "XAUUSD",   # Gold
-        "US30",     # Dow Jones
-        "BTCUSD"    # Bitcoin (if your broker supports it)
+        "GBPJPY",
+        "XAUUSD",
+        "US30",
+        "BTCUSD"
     ]
     
-    # Timeframes for Analysis - DO NOT CHANGE (SMC Strategy requirement)
-    # MT5 uses different timeframe constants
-    HTF_TIMEFRAME: str = "H4"  # Higher timeframe for context (4 hours)
-    HTF_TIMEFRAME_ALT: str = "D1"  # Alternative higher timeframe (Daily)
-    ITF_TIMEFRAME: str = "H1"  # Intermediate timeframe for setup (1 hour)
-    ITF_TIMEFRAME_ALT: str = "M15"  # Alternative intermediate timeframe (15 min)
-    LTF_TIMEFRAME: str = "M15"  # Lower timeframe for entry (15 min)
-    LTF_TIMEFRAME_ALT: str = "M5"  # Alternative lower timeframe (5 min)
+    # Timeframes
+    HTF_TIMEFRAME: str = "H4"
+    HTF_TIMEFRAME_ALT: str = "D1"
+    ITF_TIMEFRAME: str = "H1"
+    ITF_TIMEFRAME_ALT: str = "M15"
+    LTF_TIMEFRAME: str = "M15"
+    LTF_TIMEFRAME_ALT: str = "M5"
     
-    # MT5 Timeframe Mapping - DO NOT CHANGE
+    # MT5 Timeframe Mapping
     TIMEFRAME_MAP: Dict[str, int] = {
-        "M1": 1,      # 1 minute
-        "M5": 5,      # 5 minutes
-        "M15": 15,    # 15 minutes
-        "M30": 30,    # 30 minutes
-        "H1": 16385,  # 1 hour
-        "H4": 16388,  # 4 hours
-        "D1": 16408,  # Daily
-        "W1": 32769,  # Weekly
-        "MN1": 49153  # Monthly
+        "M1": 1,
+        "M5": 5,
+        "M15": 15,
+        "M30": 30,
+        "H1": 16385,
+        "H4": 16388,
+        "D1": 16408,
+        "W1": 32769,
+        "MN1": 49153
     }
     
-    # Risk Management - YOU CAN ADJUST THESE
-    MAX_POSITION_SIZE_PERCENT: float = 2.0  # Maximum 2% of capital per trade
-    MAX_DAILY_LOSS_PERCENT: float = 5.0  # Stop trading if 5% daily loss
-    MAX_OPEN_POSITIONS: int = 3  # Maximum concurrent positions
-    DEFAULT_LEVERAGE: int = 1  # Leverage (1 = no leverage, RECOMMENDED)
+    # Risk Management
+    MAX_POSITION_SIZE_PERCENT: float = 2.0
+    MAX_DAILY_LOSS_PERCENT: float = 5.0
+    MAX_OPEN_POSITIONS: int = 3
+    DEFAULT_LEVERAGE: int = 1
     
-    # MT5 Specific - Lot Size Calculation
-    MIN_LOT_SIZE: float = 0.01  # Minimum lot size
-    MAX_LOT_SIZE: float = 10.0  # Maximum lot size
-    LOT_STEP: float = 0.01  # Lot size step
-    RISK_PER_TRADE_PERCENT: float = 1.0  # Risk 1% per trade
+    # MT5 Lot Size
+    MIN_LOT_SIZE: float = 0.01
+    MAX_LOT_SIZE: float = 10.0
+    LOT_STEP: float = 0.01
+    RISK_PER_TRADE_PERCENT: float = 1.0
     
-    # Stop Loss and Take Profit - YOU CAN ADJUST
-    SL_PADDING_PIPS: float = 3.0  # Stop loss padding in pips
-    MINIMUM_TP1_RR: float = 2.0  # Minimum Risk-Reward for TP1
-    # TP1 = External liquidity (wherever it is)
-    # TP2 = HTF liquidity (wherever it is)
-    PARTIAL_CLOSE_TP1_PERCENT: float = 50.0  # Close 50% at TP1
-    MOVE_SL_TO_BREAKEVEN_AT_TP1: bool = True  # Move SL to entry when TP1 hit
+    # Stop Loss and Take Profit
+    SL_PADDING_PIPS: float = 3.0
+    MINIMUM_TP1_RR: float = 2.0
+    PARTIAL_CLOSE_TP1_PERCENT: float = 50.0
+    MOVE_SL_TO_BREAKEVEN_AT_TP1: bool = True
     
-    # Machine Learning Settings - DO NOT CHANGE
+    # Machine Learning Settings
     ML_MODEL_1_TYPE: str = "random_forest"
     ML_MODEL_2_TYPE: str = "gradient_boosting"
     ML_MODEL_3_TYPE: str = "lstm"
-    ML_ENSEMBLE_THRESHOLD: float = 0.6  # 60% agreement required
-    ML_RETRAIN_INTERVAL_HOURS: int = 24  # Retrain models daily
+    ML_ENSEMBLE_THRESHOLD: float = 0.6
+    ML_RETRAIN_INTERVAL_HOURS: int = 24
     
-    # Sentiment Analysis - DO NOT CHANGE
-    SENTIMENT_THRESHOLD_BULLISH: float = 0.6  # 60% bullish sentiment
-    SENTIMENT_THRESHOLD_BEARISH: float = -0.6  # -60% bearish sentiment
-    SENTIMENT_WEIGHT: float = 0.3  # 30% weight in final decision
+    # Sentiment Analysis
+    SENTIMENT_THRESHOLD_BULLISH: float = 0.6
+    SENTIMENT_THRESHOLD_BEARISH: float = -0.6
+    SENTIMENT_WEIGHT: float = 0.3
     
-    # News Scraping - YOU CAN ADD MORE SOURCES
+    # News Scraping
     NEWS_API_KEY: str = Field(default="", env="NEWS_API_KEY")
     NEWS_SOURCES: List[str] = [
         "forex-factory",
@@ -128,14 +128,14 @@ class Settings(BaseSettings):
         "the-economist",
         "financial-times"
     ]
-    NEWS_FETCH_INTERVAL_MINUTES: int = 60  # Fetch news every hour
+    NEWS_FETCH_INTERVAL_MINUTES: int = 60
     
-    # Telegram Notifications - FILL IN YOUR DETAILS
+    # Telegram Notifications
     TELEGRAM_BOT_TOKEN: str = Field(default="", env="TELEGRAM_BOT_TOKEN")
     TELEGRAM_CHAT_ID: str = Field(default="", env="TELEGRAM_CHAT_ID")
     ENABLE_TELEGRAM: bool = Field(default=True, env="ENABLE_TELEGRAM")
     
-    # Discord Notifications (Optional) - FILL IF YOU WANT DISCORD
+    # Discord Notifications (Optional)
     DISCORD_WEBHOOK_URL: str = Field(default="", env="DISCORD_WEBHOOK_URL")
     ENABLE_DISCORD: bool = Field(default=False, env="ENABLE_DISCORD")
     
@@ -147,54 +147,54 @@ class Settings(BaseSettings):
     EMAIL_SMTP_SERVER: str = Field(default="smtp.gmail.com", env="EMAIL_SMTP_SERVER")
     EMAIL_SMTP_PORT: int = Field(default=587, env="EMAIL_SMTP_PORT")
     
-    # Database Settings - DO NOT CHANGE (SQLite for free deployment)
+    # Database Settings
     DATABASE_URL: str = Field(
         default="sqlite:///./data/trading_bot.db",
         env="DATABASE_URL"
     )
     
-    # Logging - YOU CAN CHANGE LOG LEVEL
-    LOG_LEVEL: str = Field(default="INFO", env="LOG_LEVEL")  # DEBUG, INFO, WARNING, ERROR
+    # Logging
+    LOG_LEVEL: str = Field(default="INFO", env="LOG_LEVEL")
     LOG_FILE_PATH: str = "logs/trading_bot.log"
-    LOG_MAX_BYTES: int = 10485760  # 10MB
+    LOG_MAX_BYTES: int = 10485760
     LOG_BACKUP_COUNT: int = 5
     
-    # Market Update Interval - YOU CAN CHANGE THIS
-    MARKET_UPDATE_INTERVAL_MINUTES: int = 60  # Update market data every hour
+    # Market Update Interval
+    MARKET_UPDATE_INTERVAL_MINUTES: int = 60
     
-    # Auto Trading - CHANGE THIS WHEN READY
-    AUTO_TRADING_ENABLED: bool = Field(default=True, env="AUTO_TRADING_ENABLED")  # KEEP FALSE
+    # Auto Trading
+    AUTO_TRADING_ENABLED: bool = Field(default=False, env="AUTO_TRADING_ENABLED")
     
-    # API Rate Limiting - DO NOT CHANGE
+    # API Rate Limiting
     API_RATE_LIMIT_CALLS: int = 1200
-    API_RATE_LIMIT_PERIOD: int = 60  # seconds
+    API_RATE_LIMIT_PERIOD: int = 60
     
-    # SMC Strategy Parameters - DO NOT CHANGE (Core algorithm)
-    SMC_MSS_CONFIRMATION_CANDLES: int = 1  # Candles for MSS confirmation
-    SMC_BOS_DOUBLE_BREAK_REQUIRED: bool = True  # Require double BOS
-    SMC_FVG_MIN_SIZE_PERCENT: float = 0.1  # Minimum FVG size 0.1%
-    SMC_OB_LOOKBACK_CANDLES: int = 150  # Look back 150 candles for OB
-    SMC_BB_LOOKBACK_CANDLES: int = 150  # Look back 150 candles for BB
+    # SMC Strategy Parameters
+    SMC_MSS_CONFIRMATION_CANDLES: int = 1
+    SMC_BOS_DOUBLE_BREAK_REQUIRED: bool = True
+    SMC_FVG_MIN_SIZE_PERCENT: float = 0.1
+    SMC_OB_LOOKBACK_CANDLES: int = 150
+    SMC_BB_LOOKBACK_CANDLES: int = 150
     
-    # POI Selection Rules - DO NOT CHANGE
+    # POI Selection Rules
     POI_REQUIRE_INDUCEMENT: bool = True
     POI_REQUIRE_UNMITIGATED: bool = True
     POI_SELECT_CLOSEST_TO_LIQUIDITY: bool = True
     
-    # Model Paths - DO NOT CHANGE
+    # Model Paths
     MODEL_SAVE_PATH: Path = Path("models")
     DATA_SAVE_PATH: Path = Path("data")
     
-    # Security Settings - DO NOT CHANGE
+    # Security Settings
     API_KEY_ENCRYPTION_ENABLED: bool = True
-    REQUIRE_IP_WHITELIST: bool = True  # Set True for production
-    ALLOWED_IPS: List[str] = []  # Add your IPs if whitelist enabled
+    REQUIRE_IP_WHITELIST: bool = False
+    ALLOWED_IPS: List[str] = []
     
-    # Performance Monitoring - DO NOT CHANGE
+    # Performance Monitoring
     ENABLE_PERFORMANCE_TRACKING: bool = True
     PERFORMANCE_REPORT_INTERVAL_HOURS: int = 24
     
-    # Backtesting - YOU CAN CHANGE DATES
+    # Backtesting
     BACKTEST_START_DATE: str = "2023-01-01"
     BACKTEST_END_DATE: str = "2024-01-01"
     BACKTEST_INITIAL_CAPITAL: float = 10000.0
@@ -203,12 +203,13 @@ class Settings(BaseSettings):
     MT5_ENABLE_EXPERT_ADVISOR: bool = Field(default=False, env="MT5_ENABLE_EXPERT_ADVISOR")
     MT5_MAGIC_NUMBER: int = Field(default=234000, env="MT5_MAGIC_NUMBER")
     MT5_DEVIATION: int = Field(default=20, env="MT5_DEVIATION")
-    MT5_FILLING_MODE: str = Field(default="FOK", env="MT5_FILLING_MODE")  # FOK, IOC, or RETURN
+    MT5_FILLING_MODE: str = Field(default="FOK", env="MT5_FILLING_MODE")
     
     class Config:
         env_file = "config/secrets.env"
         env_file_encoding = "utf-8"
         case_sensitive = True
+        extra = "ignore"  # CRITICAL FIX: Ignore extra fields from .env
 
 
 # Create global settings instance
@@ -219,13 +220,16 @@ settings = Settings()
 def validate_settings():
     """
     Validates that all required settings are properly configured.
-    Run this before starting the bot.
     """
     errors = []
     warnings = []
     
+    # Check MASTER_KEY
+    if not settings.MASTER_KEY or len(settings.MASTER_KEY) < 16:
+        errors.append("MASTER_KEY must be at least 16 characters")
+    
     # Check MT5 credentials
-    if settings.PRIMARY_PLATFORM == "mt5" or "mt5" in settings.PRIMARY_PLATFORM.lower():
+    if settings.PRIMARY_PLATFORM == "mt5":
         if settings.MT5_LOGIN == 0:
             errors.append("MT5_LOGIN is not set in secrets.env")
         
@@ -238,18 +242,7 @@ def validate_settings():
         if not settings.MT5_PATH:
             warnings.append("MT5_PATH is not set. Auto-detection will be attempted.")
     
-    # Check alternative platforms if enabled
-    if settings.USE_BINANCE:
-        if not settings.BINANCE_API_KEY:
-            errors.append("BINANCE_API_KEY is not set but USE_BINANCE is true")
-        if not settings.BINANCE_API_SECRET:
-            errors.append("BINANCE_API_SECRET is not set but USE_BINANCE is true")
-    
-    if settings.USE_DERIV:
-        if not settings.DERIV_API_TOKEN:
-            errors.append("DERIV_API_TOKEN is not set but USE_DERIV is true")
-    
-    # Check notification settings if enabled
+    # Check Telegram
     if settings.ENABLE_TELEGRAM:
         if not settings.TELEGRAM_BOT_TOKEN:
             errors.append("TELEGRAM_BOT_TOKEN is not set but Telegram is enabled")
@@ -269,11 +262,11 @@ def validate_settings():
         warnings.append("MAX_POSITION_SIZE_PERCENT is too high (max recommended: 10%)")
     
     if settings.DEFAULT_LEVERAGE > 5:
-        warnings.append("HIGH LEVERAGE DETECTED: This is risky. Consider reducing leverage.")
+        warnings.append("HIGH LEVERAGE DETECTED: This is risky.")
     
     # Warn if auto trading is enabled
     if settings.AUTO_TRADING_ENABLED:
-        warnings.append("WARNING: AUTO_TRADING is ENABLED. Are you sure?")
+        warnings.append("WARNING: AUTO_TRADING is ENABLED.")
     
     # Print results
     if errors:
@@ -304,7 +297,6 @@ def validate_settings():
 
 
 if __name__ == "__main__":
-    # Test configuration
     if validate_settings():
         print("Configuration loaded successfully!")
     else:

@@ -1,9 +1,9 @@
 """
-Database Initialization Script
+Database Initialization Script - FIXED VERSION
 Creates all tables and sets up initial admin user
 
 Author: Elite QDev Team
-Location: scripts/init_database.py (CREATE NEW FILE)
+Location: scripts/init_database.py (REPLACE ENTIRE FILE)
 """
 
 import sys
@@ -13,6 +13,11 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+# CRITICAL: Load environment FIRST
+import load_env
+load_env.load_environment()
+
+# Now import everything else
 from config.settings import settings
 from src.database.models import Base, User, UserRole
 from sqlalchemy import create_engine
@@ -69,7 +74,6 @@ def init_database():
     print("\n[5/5] Creating initial admin user...")
     
     try:
-        # Check if admin already exists
         admin_chat_id = int(settings.TELEGRAM_CHAT_ID) if settings.TELEGRAM_CHAT_ID else None
         
         if not admin_chat_id:
@@ -86,7 +90,6 @@ def init_database():
                 print(f"Chat ID: {admin_chat_id}")
                 print(f"Role: {existing_admin.role.value}")
             else:
-                # Create new admin
                 admin = User(
                     telegram_chat_id=admin_chat_id,
                     role=UserRole.ADMIN,
@@ -101,7 +104,7 @@ def init_database():
                 print(f"SUCCESS: Admin user created")
                 print(f"Chat ID: {admin_chat_id}")
                 print(f"Role: ADMIN")
-                print(f"\nImportant: Start a conversation with your bot to activate this admin account")
+                print(f"\nImportant: Start a conversation with your bot to activate")
     
     except Exception as e:
         print(f"ERROR: Failed to create admin user: {e}")
@@ -125,10 +128,8 @@ def init_database():
             print(f"  Size: {file_size} bytes")
     
     print("\nNext steps:")
-    print("  1. Set MASTER_KEY environment variable")
-    print("  2. Configure config/secrets.env with your credentials")
-    print("  3. Run: python test_mt5_connection.py")
-    print("  4. Run: python main.py")
+    print("  1. Run: python test_mt5_connection.py")
+    print("  2. Run: python main.py")
     
     return True
 
