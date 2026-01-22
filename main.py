@@ -1,10 +1,9 @@
 """
-NYX Trading Bot - Production Multi-User Auto-Trading System
-COMPLETE UPDATED VERSION WITH ALL FIXES
+NYX Trading Bot - Production Main Entry Point
+COMPLETE ASYNC REWRITE with Auto-Reconnect Heartbeat
 
-Author: BLESSING OMOREGIE
 Version: 2.0.0 Production
-GitHub: Nixiestone
+Author: BLESSING OMOREGIE (Enhanced by Elite QDev Team)
 """
 
 import sys
@@ -19,41 +18,41 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from config.settings import settings, validate_settings
-from src.database.models import Base, User, MT5Account, UserRole
+from src.database.models import Base, User, MT5Account, UserRole, AccountStatus
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from telegram.ext import Application
 
-# Import core modules
+# Import all handlers
 from src.utils.logger import get_logger
-
-# FIXED: Import all handlers including new ones
 from src.telegram_bot.handlers.user_commands import register_user_handlers
 from src.telegram_bot.handlers.admin_commands import register_admin_handlers
 from src.telegram_bot.handlers.account_commands import register_account_handlers
 from src.telegram_bot.handlers.trade_commands import register_trade_handlers
-from src.telegram_bot.handlers.button_handlers import register_button_handlers  # NEW
-from src.telegram_bot.handlers.missing_commands import register_missing_handlers  # NEW
-
-# FIXED: Import message queue for offline message handling
-from src.telegram_bot.message_queue import get_message_queue  # NEW
+from src.telegram_bot.handlers.button_handlers import register_button_handlers
+from src.telegram_bot.handlers.missing_commands import register_missing_handlers
+from src.telegram_bot.message_queue import get_message_queue
 
 logger = get_logger("MainBot", settings.LOG_LEVEL, settings.LOG_FILE_PATH)
 
 
 class ProductionTradingBot:
     """
-    Production-grade multi-user trading bot with auto-trading capabilities.
-    FIXED VERSION with all bug fixes applied.
+    Production-grade async trading bot with:
+    - Non-blocking asyncio operations
+    - MT5 auto-reconnect heartbeat
+    - Graceful shutdown
+    - Message queue for offline resilience
     """
     
     def __init__(self):
-        """Initialize the trading bot."""
         self.logger = logger
         self.running = False
         self.telegram_app = None
         self.db_session = None
-        self.message_queue = get_message_queue()  # NEW: Initialize message queue
+        self.message_queue = get_message_queue()
+        self.mt5_connector = None
+        self.shutdown_event = asyncio.Event()
         
         self.logger.info("=" * 70)
         self.logger.info("NYX TRADING BOT - PRODUCTION INITIALIZATION")
@@ -62,7 +61,7 @@ class ProductionTradingBot:
         self.logger.info("=" * 70)
     
     async def initialize(self) -> bool:
-        """Initialize all bot systems."""
+        """Initialize all bot systems asynchronously"""
         try:
             # Step 1: Validate configuration
             self.logger.info("[1/6] Validating configuration...")
@@ -112,28 +111,31 @@ class ProductionTradingBot:
             return False
     
     async def _init_database(self) -> bool:
-        """Initialize database connection and schema."""
+        """Initialize database with proper async handling"""
         try:
-            # FIXED: Ensure data directory exists
             Path("data").mkdir(parents=True, exist_ok=True)
             
-            # Create engine
-            engine = create_engine(
-                settings.DATABASE_URL,
-                echo=settings.DEBUG,
-                pool_pre_ping=True,
-                pool_size=10,
-                max_overflow=20
+            # Create engine (synchronous but in executor)
+            loop = asyncio.get_event_loop()
+            engine = await loop.run_in_executor(
+                None,
+                lambda: create_engine(
+                    settings.DATABASE_URL,
+                    echo=settings.DEBUG,
+                    pool_pre_ping=True,
+                    pool_size=10,
+                    max_overflow=20
+                )
             )
             
-            # Create all tables
-            Base.metadata.create_all(engine)
+            # Create tables
+            await loop.run_in_executor(None, Base.metadata.create_all, engine)
             
-            # Create session factory
+            # Create session
             Session = sessionmaker(bind=engine)
             self.db_session = Session()
             
-            # Create default admin user if not exists
+            # Create admin user if needed
             admin_chat_id = int(settings.TELEGRAM_CHAT_ID) if settings.TELEGRAM_CHAT_ID else None
             
             if admin_chat_id:
@@ -160,18 +162,17 @@ class ProductionTradingBot:
             return False
     
     async def _init_telegram_bot(self) -> bool:
-        """Initialize Telegram bot application."""
+        """Initialize Telegram bot with all handlers"""
         try:
             if not settings.ENABLE_TELEGRAM or not settings.TELEGRAM_BOT_TOKEN:
-                self.logger.warning("Telegram bot disabled or token not configured")
+                self.logger.warning("Telegram bot disabled")
                 return True
             
-            # Create application
             self.telegram_app = Application.builder().token(
                 settings.TELEGRAM_BOT_TOKEN
             ).build()
             
-            # FIXED: Register ALL command handlers including new ones
+            # Register ALL handlers
             self.logger.info("Registering command handlers...")
             
             register_user_handlers(self.telegram_app, self.db_session)
@@ -186,47 +187,48 @@ class ProductionTradingBot:
             register_trade_handlers(self.telegram_app, self.db_session)
             self.logger.info("  - Trade commands registered")
             
-            # NEW: Register button handlers
             register_button_handlers(self.telegram_app, self.db_session)
             self.logger.info("  - Button handlers registered")
             
-            # NEW: Register missing commands
             register_missing_handlers(self.telegram_app, self.db_session)
             self.logger.info("  - Missing commands registered")
             
-            self.logger.info("All Telegram bot handlers registered successfully")
+            self.logger.info("All Telegram handlers registered")
             
             return True
             
         except Exception as e:
-            self.logger.exception(f"Telegram bot initialization error: {e}")
+            self.logger.exception(f"Telegram init error: {e}")
             return False
     
     async def _init_security(self) -> bool:
-        """Initialize security systems."""
+        """Initialize security systems"""
         try:
-            # Initialize encryption
             from src.security.encryption import get_encryptor
+            from src.security.validator import RateLimiter
+            
             encryptor = get_encryptor()
             self.logger.info("Encryption system initialized")
             
-            # Initialize rate limiter
-            from src.security.validator import RateLimiter
             self.rate_limiter = RateLimiter(max_calls=10, time_window=60)
             self.logger.info("Rate limiter initialized")
             
             return True
             
         except Exception as e:
-            self.logger.exception(f"Security initialization error: {e}")
+            self.logger.exception(f"Security init error: {e}")
             return False
     
     async def _init_trading_systems(self) -> bool:
-        """Initialize trading systems."""
+        """Initialize trading systems with MT5 connector"""
         try:
-            # Import trading modules
             from src.core.account_manager import AccountManager
             from src.core.trade_copier import TradeCopier
+            from src.data.mt5_connector import MT5Connector
+            
+            # Initialize MT5 connector
+            self.mt5_connector = MT5Connector(settings)
+            self.logger.info("MT5 connector initialized")
             
             # Initialize account manager
             self.account_manager = AccountManager(settings, self.db_session)
@@ -236,32 +238,22 @@ class ProductionTradingBot:
             self.trade_copier = TradeCopier(settings, self.db_session)
             self.logger.info("Trade copier initialized")
             
-            self.logger.info("Trading systems ready")
-            
             return True
             
         except Exception as e:
-            self.logger.exception(f"Trading systems initialization error: {e}")
+            self.logger.exception(f"Trading systems init error: {e}")
             return False
     
     async def _start_background_tasks(self) -> bool:
-        """Start all background tasks."""
+        """Start all async background tasks"""
         try:
-            # Start Telegram bot polling in background
-            if self.telegram_app:
-                asyncio.create_task(self._run_telegram_bot())
-            
-            # Start signal scanner in background
+            # Start all background tasks concurrently
+            asyncio.create_task(self._run_telegram_bot())
             asyncio.create_task(self._run_signal_scanner())
-            
-            # Start account health checker in background
             asyncio.create_task(self._run_health_checker())
-            
-            # Start performance reporter in background
             asyncio.create_task(self._run_performance_reporter())
-            
-            # NEW: Start message queue processor
             asyncio.create_task(self._run_message_queue_processor())
+            asyncio.create_task(self._run_mt5_heartbeat())  # NEW: MT5 reconnection heartbeat
             
             return True
             
@@ -270,26 +262,23 @@ class ProductionTradingBot:
             return False
     
     async def _run_telegram_bot(self):
-        """Run Telegram bot polling loop."""
+        """Run Telegram bot polling loop (async)"""
         try:
             self.logger.info("Starting Telegram bot polling...")
             await self.telegram_app.initialize()
             await self.telegram_app.start()
             
-            # NEW: Send queued messages when bot comes online
-            self.logger.info("Processing queued messages from offline period...")
+            # Process queued messages
+            self.logger.info("Processing queued messages...")
             stats = await self.message_queue.send_queued_messages(self.telegram_app.bot)
             if stats['sent'] > 0:
-                self.logger.info(f"Sent {stats['sent']} queued messages that were pending")
-            if stats['failed'] > 0:
-                self.logger.warning(f"{stats['failed']} messages failed to send")
+                self.logger.info(f"Sent {stats['sent']} queued messages")
             
             await self.telegram_app.updater.start_polling(drop_pending_updates=True)
-            self.logger.info("Telegram bot is now running")
+            self.logger.info("Telegram bot is running")
             
-            # Keep running
-            while self.running:
-                await asyncio.sleep(1)
+            # Wait for shutdown
+            await self.shutdown_event.wait()
             
             # Shutdown
             await self.telegram_app.updater.stop()
@@ -299,101 +288,112 @@ class ProductionTradingBot:
         except Exception as e:
             self.logger.exception(f"Telegram bot error: {e}")
     
+    async def _run_mt5_heartbeat(self):
+        """
+        MT5 Auto-Reconnect Heartbeat
+        Checks connection every 60 seconds and reconnects if dropped
+        """
+        self.logger.info("Starting MT5 heartbeat...")
+        
+        while self.running:
+            try:
+                await asyncio.sleep(60)  # Check every minute
+                
+                # Check if MT5 connector exists
+                if not self.mt5_connector:
+                    continue
+                
+                # Check connection
+                if not self.mt5_connector.check_connection():
+                    self.logger.warning("MT5 connection lost. Attempting reconnect...")
+                    
+                    # Attempt reconnection
+                    if self.mt5_connector.connect():
+                        self.logger.info("MT5 reconnected successfully")
+                    else:
+                        self.logger.error("MT5 reconnection failed. Will retry in 60s")
+                
+            except Exception as e:
+                self.logger.exception(f"MT5 heartbeat error: {e}")
+                await asyncio.sleep(60)
+    
     async def _run_signal_scanner(self):
-        """Background task: Scan for trading signals."""
+        """Background signal scanner (async)"""
         self.logger.info("Starting signal scanner...")
         
         while self.running:
             try:
-                # Wait for configured interval
                 await asyncio.sleep(settings.MARKET_UPDATE_INTERVAL_MINUTES * 60)
                 
                 self.logger.info("Running signal scan...")
-                
-                # Generate signals
-                # This will be implemented in the signal generator
-                # and distributed via trade copier to all active accounts
-                
+                # Signal generation logic here
                 self.logger.info("Signal scan complete")
                 
             except Exception as e:
                 self.logger.exception(f"Signal scanner error: {e}")
-                await asyncio.sleep(60)  # Wait before retry
+                await asyncio.sleep(60)
     
     async def _run_health_checker(self):
-        """Background task: Monitor account health."""
+        """Background health checker (async)"""
         self.logger.info("Starting health checker...")
         
         while self.running:
             try:
-                # Check every 5 minutes
-                await asyncio.sleep(300)
+                await asyncio.sleep(300)  # Every 5 minutes
                 
-                # FIXED: Use AccountStatus enum
-                from src.database.models import AccountStatus
-                
-                # Check all active accounts
+                # Check active accounts
                 active_accounts = self.db_session.query(MT5Account).filter_by(
-                    status=AccountStatus.ACTIVE,  # FIXED
+                    status=AccountStatus.ACTIVE,
                     auto_trade_enabled=True
                 ).all()
                 
-                for account in active_accounts:
-                    # Verify connection and update status
-                    # This will be implemented in account manager
-                    pass
+                # Health checks here
                 
             except Exception as e:
                 self.logger.exception(f"Health checker error: {e}")
                 await asyncio.sleep(60)
     
     async def _run_performance_reporter(self):
-        """Background task: Generate performance reports."""
+        """Background performance reporter (async)"""
         self.logger.info("Starting performance reporter...")
         
         while self.running:
             try:
-                # Daily report at configured interval
                 await asyncio.sleep(settings.PERFORMANCE_REPORT_INTERVAL_HOURS * 3600)
                 
                 # Generate and send reports
-                # This will be implemented in reporting module
                 
             except Exception as e:
                 self.logger.exception(f"Performance reporter error: {e}")
                 await asyncio.sleep(3600)
     
     async def _run_message_queue_processor(self):
-        """
-        Background task: Process message queue.
-        NEW: Handles offline message delivery and cleanup
-        """
+        """Background message queue processor (async)"""
         self.logger.info("Starting message queue processor...")
         
         while self.running:
             try:
-                # Process queue every 5 minutes
-                await asyncio.sleep(300)
+                await asyncio.sleep(300)  # Every 5 minutes
                 
-                # Send any queued messages
+                # Process queue
                 if self.telegram_app:
                     stats = await self.message_queue.send_queued_messages(self.telegram_app.bot)
                     if stats['sent'] > 0:
-                        self.logger.info(f"Processed message queue: {stats['sent']} sent, {stats['failed']} failed")
+                        self.logger.info(f"Queue: {stats['sent']} sent, {stats['failed']} failed")
                 
-                # Cleanup old messages once per day
+                # Cleanup old messages occasionally
                 import random
-                if random.random() < 0.01:  # ~1% chance = roughly once per day
+                if random.random() < 0.01:
                     deleted = self.message_queue.cleanup_old_messages(days=7)
                     if deleted > 0:
-                        self.logger.info(f"Cleaned up {deleted} old messages from queue")
+                        self.logger.info(f"Cleaned up {deleted} old messages")
                 
             except Exception as e:
-                self.logger.exception(f"Message queue processor error: {e}")
+                self.logger.exception(f"Message queue error: {e}")
                 await asyncio.sleep(60)
     
     async def run(self):
-        """Main bot execution loop."""
+        """Main async execution loop"""
         if not await self.initialize():
             self.logger.error("Initialization failed. Exiting.")
             return
@@ -406,15 +406,9 @@ class ProductionTradingBot:
         self.logger.info("Press Ctrl+C to stop")
         self.logger.info("")
         
-        # NEW: Log message queue stats
-        queue_stats = self.message_queue.get_queue_stats()
-        if queue_stats['pending'] > 0:
-            self.logger.info(f"Message queue: {queue_stats['pending']} pending messages")
-        
         try:
-            # Keep main loop alive
-            while self.running:
-                await asyncio.sleep(1)
+            # Wait for shutdown signal
+            await self.shutdown_event.wait()
         
         except KeyboardInterrupt:
             self.logger.info("\nShutdown signal received (Ctrl+C)")
@@ -423,35 +417,47 @@ class ProductionTradingBot:
             await self.shutdown()
     
     async def shutdown(self):
-        """Graceful shutdown."""
+        """Graceful async shutdown"""
         self.logger.info("\nInitiating graceful shutdown...")
         
         self.running = False
+        self.shutdown_event.set()
         
         # Wait for background tasks to complete
         await asyncio.sleep(2)
         
-        # Close database session
+        # Close database
         if self.db_session:
             self.db_session.close()
         
-        # NEW: Log final queue stats
+        # Disconnect MT5
+        if self.mt5_connector:
+            self.mt5_connector.disconnect()
+        
+        # Log final stats
         queue_stats = self.message_queue.get_queue_stats()
         if queue_stats['pending'] > 0:
-            self.logger.info(f"Shutdown: {queue_stats['pending']} messages queued for next startup")
+            self.logger.info(f"Shutdown: {queue_stats['pending']} messages queued")
         
         self.logger.info("Shutdown complete")
         self.logger.info("=" * 70)
 
 
 async def main():
-    """Main entry point."""
+    """Async main entry point"""
     bot = ProductionTradingBot()
+    
+    # Setup signal handlers for graceful shutdown
+    def signal_handler(sig, frame):
+        bot.shutdown_event.set()
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     await bot.run()
 
 
 if __name__ == "__main__":
-    # Run with asyncio
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

@@ -49,7 +49,7 @@ class UserCommandHandler:
                 self.db.commit()
                 
                 welcome_msg = f"""
-Welcome to NYX Trading Bot, {first_name}!
+Welcome to NIXIE TRADES Bot, {first_name}!
 
 PRODUCTION MULTI-USER AUTO-TRADING SYSTEM
 
@@ -62,10 +62,9 @@ You can now:
 Get started with /help to see all commands.
 
 IMPORTANT DISCLAIMER:
-Trading carries risk. Only use capital you can afford to lose. 
-This bot is for informational purposes. Trade responsibly.
+Trading carries risk. NOT FINANCIAL ADVICE!. 
+This bot is for informational purposes only. Trade responsibly.
 
-Developer: BLESSING OMOREGIE (Nixiestone)
                 """
                 
                 is_admin = False
@@ -129,7 +128,7 @@ INFORMATION:
 /status - Bot and account status
 /about - About this bot
 
-Need help? Contact: https://t.me/Nixiestone
+Need help? Contact: @Nixiestone
         """
         
         await update.message.reply_text(help_text.strip())
@@ -193,7 +192,7 @@ Notifications: {'ON' if user.notifications_enabled else 'OFF'}
 
 Last Active: {user.last_active.strftime('%Y-%m-%d %H:%M UTC') if user.last_active else 'Never'}
 
-Bot Version: 2.0.0 Production
+Bot Version: 2.0.0 
             """
             
             await update.message.reply_text(status_msg.strip())
