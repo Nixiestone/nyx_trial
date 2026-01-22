@@ -15,6 +15,7 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from typing import Optional
 import colorlog
+from sympy import re
 
 
 class TradingBotLogger:
@@ -112,6 +113,15 @@ class TradingBotLogger:
     def exception(self, message: str, **kwargs):
         """Log exception with traceback."""
         self.logger.exception(message, **kwargs)
+        
+    def _sanitize_message(self, message: str) -> str:
+        """Remove sensitive data from log messages."""
+        # Remove potential passwords
+        import re
+        message = re.sub(r'password["\s:=]+[\w]+', 'password=***', message, flags=re.IGNORECASE)
+        message = re.sub(r'token["\s:=]+[\w-]+', 'token=***', message, flags=re.IGNORECASE)
+        message = re.sub(r'key["\s:=]+[\w-]+', 'key=***', message, flags=re.IGNORECASE)
+        return message
     
     def trade_signal(self, signal_type: str, symbol: str, details: dict):
         """

@@ -1,13 +1,18 @@
 services:
+  # Main Trading Bot Service
   - type: web
     name: nyx-trading-bot
     env: python
-    buildCommand: pip install -r requirements.txt
+    region: oregon
+    plan: free
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
     startCommand: python main.py
+    healthCheckPath: /health
     envVars:
+      # Security - Set in Render Dashboard
       - key: MASTER_KEY
-        sync: false
-      - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: MT5_LOGIN
         sync: false
@@ -15,5 +20,27 @@ services:
         sync: false
       - key: MT5_SERVER
         sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      
+      # Bot Configuration
       - key: AUTO_TRADING_ENABLED
         value: true
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: false
+      - key: LOG_LEVEL
+        value: INFO
+      
+      # Database
+      - key: DATABASE_URL
+        value: sqlite:///./data/trading_bot.db
+    
+    # Disk for database persistence
+    disk:
+      name: bot-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1

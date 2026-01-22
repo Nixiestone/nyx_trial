@@ -14,8 +14,8 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 # CRITICAL: Load environment FIRST
-import load_env
-load_env.load_environment()
+import load_environment
+load_environment.load_environment()
 
 # Now import everything else
 from config.settings import settings
